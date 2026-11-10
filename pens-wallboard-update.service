@@ -1,0 +1,9 @@
+[Unit]
+Description=Pull Pens Wallboard updates from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=zack
+ExecStart=/home/zack/pens-wallboard/deploy/update.sh

@@ -153,6 +153,18 @@ A few other things worth knowing:
   `data/history_events.json`, like `{"03-15": ["1995: Something happened"]}`.
 - `affiliates.py`, `extras.py` and `demo.py` need to stay in the same folder as `app.py`.
 
+## How I work on it
+
+I test changes on my PC first and only push to `main` when they work, because the wall display
+updates itself from `main`.
+
+- `tools\run-local.bat` runs a copy on the PC (add a demo mode, like `run-local live`).
+- `tools\save.bat "message"` commits and pushes to the `dev` branch. The wall ignores `dev`.
+- `tools\release.bat "message"` runs `tools/check.py` and, if it passes, merges `dev` into `main`.
+
+On the server, `deploy/update.sh` runs every 5 minutes from a systemd timer. If `main` has new
+commits it pulls them and restarts the service, and if the new version doesn't start it rolls back.
+
 ## Disclaimer
 
 This is just a fan project. It's not affiliated with the NHL, AHL, ECHL or any team. Team names and
