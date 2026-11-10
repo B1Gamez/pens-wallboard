@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Data the server builds or downloads on its own
+data/
+
+# Goal horn audio: team-owned recordings, keep them out of a public repo
+static/*.mp3
+
+# Odds and ends
+*.zip
+*.log
+.DS_Store
+Thumbs.db

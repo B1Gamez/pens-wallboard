@@ -1,0 +1,15 @@
+[Unit]
+Description=Pens Wallboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/pens-wallboard
+ExecStart=/home/pi/pens-wallboard/venv/bin/python app.py
+Restart=always
+# Environment=GOAL_HOOK_URL=http://homeassistant.local:8123/api/webhook/pens-goal
+# Environment=GOAL_HOOK_CMD=/home/pi/goal.sh
+
+[Install]
+WantedBy=multi-user.target
