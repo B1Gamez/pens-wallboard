@@ -233,13 +233,13 @@
   @keyframes flash { 50% { background: var(--black); color: var(--gold); } }
 
   /* ---------- affiliates ---------- */
-  .boardtag { position: absolute; top: 3vh; left: 0; right: 0; text-align: center; font-family: var(--display); font-size: 3.4vh; font-weight: 700; color: var(--gold); letter-spacing: .04em; }
+  .boardtag { position: absolute; top: 3vh; left: 27vw; right: 27vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; font-family: var(--display); font-size: 3.4vh; font-weight: 700; color: var(--gold); letter-spacing: .04em; }
   .boardtag:empty { display: none; }
   .boardtag b { display: inline-block; padding: .2vh .8vw; margin-right: .8vw; background: var(--gold); color: var(--black); border-radius: .4vh; font-size: 2.6vh; }
-  #affBadge { position: fixed; left: 2vw; top: 2.4vh; z-index: 6; display: none; flex-direction: column; gap: .8vh; }
+  #affBadge { position: fixed; left: 1.2vw; top: 2.4vh; z-index: 6; display: none; flex-direction: column; gap: .8vh; }
   #affBadge.alt { top: auto; bottom: 2vh; left: auto; right: 2vw; }
   #affBadge.on { display: flex; }
-  .abadge { display: flex; align-items: center; gap: .8vw; background: var(--tile); border-radius: .6vh; padding: .8vh 1.2vw; font-family: var(--display); font-size: 2.8vh; font-weight: 600; }
+  .abadge { display: flex; align-items: center; gap: .6vw; background: var(--tile); border-radius: .6vh; padding: .6vh 1vw; font-family: var(--display); font-size: 2.4vh; font-weight: 600; max-width: 25vw; white-space: nowrap; }
   .abadge .lg { font-size: 1.8vh; padding: .1vh .5vw; background: var(--gold); color: var(--black); border-radius: .3vh; font-weight: 700; }
   .abadge .us { color: var(--gold); }
   .abadge img { width: 3.4vh; height: 3.4vh; }
@@ -620,8 +620,10 @@ function renderBoard(g, mode, opts = {}) {
 
   const s = mode === "live" && g.situation;
   let html = "";
-  if (s && s.pp) html = `<span class="${s.pp === us ? "" : "them"}">Power play ${TEAM_NAMES[s.pp] || s.pp}${s.time ? "  " + s.time : ""}</span>`;
-  else if (s && s.en) html = `<span class="${s.en === us ? "" : "them"}">Empty net ${TEAM_NAMES[s.en] || s.en}</span>`;
+  // Team names come from the game itself, so affiliate teams read right too
+  const teamName = a => { const t = [g.away, g.home].find(x => x.abbrev === a); return t ? nameOf(t) : (TEAM_NAMES[a] || a); };
+  if (s && s.pp) html = `<span class="${s.pp === us ? "" : "them"}">Power play ${teamName(s.pp)}${s.time ? "  " + s.time : ""}</span>`;
+  else if (s && s.en) html = `<span class="${s.en === us ? "" : "them"}">Empty net ${teamName(s.en)}</span>`;
   $("situ").innerHTML = html;
 
   // Penalty boxes and recent goals
@@ -675,7 +677,8 @@ function renderShootout(g, list, us) {
   const lastLine = last ? `<div class="so-last">${last.headshot ? `<img src="${last.headshot}" alt="" onerror="this.remove()">` : ""}
       <span>${esc(last.full || last.name)} <small>${esc(last.team)}, round ${roundOf(last)}</small></span>
       <span class="res ${last.goal ? "g" : "x"}">${last.goal ? "SCORES" : (last.result === "save" ? "SAVED" : "NO GOAL")}</span>
-      ${last.shot ? `<small>${esc(last.shot)}</small>` : ""}</div>` : `<div class="so-next">The shootout is about to begin</div>`;
+      ${last.shot ? `<small>${esc(last.shot)}</small>` : ""}</div>`
+      : `<div class="so-next">${g.league ? "Shootout in progress" : "The shootout is about to begin"}</div>`;
   const nextLine = nextKey ? `<div class="so-next">Up next: <b>${esc(nameOf(g[nextKey]))}</b></div>` : "";
   $("so").innerHTML = `<div class="so-rows">${row("away")}${row("home")}</div>${lastLine}${nextLine}`;
 }
@@ -1448,11 +1451,12 @@ function render() {
   else if (takeover && affSummary) {
     renderSummary(affGame, affGame.state === "FINAL" ? "final" : "live", {us: takeover.code, tag: takeover.league,
       details: {periods: affGame.periods || [], shots: affGame.shots || [], stats: [], stars: [],
-                goals: affGame.goals || [], lineups: affGame.lineups}});
+                goals: affGame.goals || [], lineups: affGame.lineups, shootout: affGame.shootout || []}});
     leagueShown = false;
   }
   else if (takeover) {
-    renderBoard(takeover.live, "live", {us: takeover.code, details: {goals: takeover.live.goals || [], penalties: []},
+    renderBoard(takeover.live, "live", {us: takeover.code, details: {goals: takeover.live.goals || [],
+      penalties: takeover.live.penalties || [], shootout: takeover.live.shootout || []},
       tag: `<b>${takeover.league}${takeover.playoffs ? " PLAYOFFS" : ""}</b>${esc(takeover.name)}${takeover.series ? `: ${esc(takeover.series.text)}` : ""}`});
     leagueShown = false;
   }

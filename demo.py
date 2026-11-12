@@ -121,6 +121,9 @@ def aff_game(league, a, h, sa, sh, st, per=None, clk=None, start=None, ours="WBS
          "lastPeriodType": "REG", "statusText": "", "goals": []}
     if st == "LIVE":
         g["away"]["sog"], g["home"]["sog"] = 19, 14
+        opp = h if a == ours else a
+        g["penalties"] = [{"team": opp, "player": "Frank", "infraction": "Tripping", "left": "1:12", "left_s": 72}]
+        g["situation"] = {"pp": ours, "en": None, "time": "1:12"}
         g["goals"] = [{"period": "1st", "num": 1, "time": "06:12", "team": ours, "scorer": "Pickering", "total": None,
                        "assists": [], "strength": "pp", "en": False, "away": 1 if a == ours else 0, "home": 1 if h == ours else 0}]
     return g

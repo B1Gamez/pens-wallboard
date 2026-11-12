@@ -42,8 +42,64 @@ def period_name(n):
     return {4: "OT", 5: "SO"}.get(n, ordinal(n) if n else "")
 
 
+def mmss(s):
+    try:
+        m, sec = str(s).strip().split(":")[:2]
+        return int(m) * 60 + int(float(sec))
+    except (ValueError, AttributeError):
+        return 0
+
+
+def person_last(p):
+    if not isinstance(p, dict):
+        return ""
+    return p.get("last_name") or p.get("lastName") or ""
+
+
 def strip_tags(s):
     return re.sub(r"<[^>]+>", "", str(s or "")).strip()
+
+
+def power_play(game, pens):
+    """Whichever team has fewer players in the box is on the power play."""
+    away = [p for p in pens if p["team"] == game["away"]["abbrev"]]
+    home = [p for p in pens if p["team"] == game["home"]["abbrev"]]
+    if len(away) == len(home):
+        return None
+    short, adv = (away, game["home"]["abbrev"]) if len(away) > len(home) else (home, game["away"]["abbrev"])
+    left = min(p["left_s"] for p in short)
+    return {"pp": adv, "en": None, "time": f"{left // 60}:{left % 60:02d}"}
+
+
+def parse_shootout(gs, game):
+    """Shootout attempts in order, from whichever shootout section the feed provides."""
+    cand = next((v for k, v in gs.items() if "shootout" in k.lower() and isinstance(v, (dict, list)) and v), None)
+    if not cand:
+        return []
+    if isinstance(cand, dict):
+        home = next((v for k, v in cand.items() if "home" in k.lower() and isinstance(v, list)), [])
+        vis = next((v for k, v in cand.items() if ("visit" in k.lower() or "away" in k.lower()) and isinstance(v, list)), [])
+    else:
+        home = [s for s in cand if isinstance(s, dict) and str(s.get("home")) == "1"]
+        vis = [s for s in cand if isinstance(s, dict) and str(s.get("home")) != "1"]
+
+    def attempt(s, side):
+        sh = s.get("shooter") or s.get("shooter_info") or s
+        last, first = person_last(sh), sh.get("firstName") or sh.get("first_name") or ""
+        g = s.get("isGoal")
+        goal = g is True or str(g if g is not None else s.get("goal") or s.get("is_goal") or s.get("result") or "").lower() in ("1", "true", "goal", "yes")
+        return {"team": game[side]["abbrev"], "name": last, "full": f"{first} {last}".strip(), "headshot": "",
+                "shot": "", "goal": goal, "result": "goal" if goal else "no goal",
+                "winner": bool(s.get("isGameWinningGoal")) or str(s.get("game_winner") or s.get("winning_goal") or "") == "1",
+                "seq": num(s.get("sequence") or s.get("order") or s.get("shot_order"))}
+    A = [attempt(s, "away") for s in vis if isinstance(s, dict)]
+    H = [attempt(s, "home") for s in home if isinstance(s, dict)]
+    if A + H and all(x["seq"] for x in A + H):
+        return sorted(A + H, key=lambda x: x["seq"])
+    out = []
+    for i in range(max(len(A), len(H))):
+        out += ([A[i]] if i < len(A) else []) + ([H[i]] if i < len(H) else [])
+    return out
 
 
 class Affiliate:
@@ -233,6 +289,19 @@ class Affiliate:
             if skaters or goalies:
                 lineups[side] = {"skaters": skaters, "goalies": goalies}
         game["lineups"] = lineups or None
+        # Penalty box, power play and shootout
+        playoff = "playoff" in self.season_name.lower()
+        try:
+            game["penalties"] = self.active_penalties(gs.get("penalties") or [], game, goals, playoff)
+        except Exception as e:
+            log.info("%s penalties unavailable: %s", self.label, e)
+            game["penalties"] = []
+        game["situation"] = power_play(game, game["penalties"])
+        try:
+            game["shootout"] = parse_shootout(gs, game)
+        except Exception as e:
+            log.info("%s shootout unavailable: %s", self.label, e)
+            game["shootout"] = []
         # Starting goalies, when the feed lists lineups
         for side, key in (("home", "home_team_lineup"), ("away", "visitor_team_lineup")):
             lineup = gs.get(key) or {}
@@ -240,6 +309,59 @@ class Affiliate:
             start = next((g for g in goalies if str(g.get("start") or g.get("starting") or "") == "1"), None)
             if start and start.get("last_name"):
                 game[side]["goalie"] = f"{start.get('first_name', '')} {start['last_name']}".strip()
+
+    def active_penalties(self, raw, game, goals, playoff):
+        """Penalties still being served. Same rules as the NHL side: a double minor is two
+        minors back to back, and a power-play goal ends only the minor being served."""
+        if game["state"] != "LIVE" or game.get("intermission") or not game.get("clock") or not game.get("period"):
+            return []
+        plen = lambda n: 1200 if (n <= 3 or playoff) else 300
+        before = lambda n: sum(plen(k) for k in range(1, n))
+        now = before(game["period"]) + plen(game["period"]) - mmss(game["clock"])
+        home_id, home, away = game["home"]["id"], game["home"]["abbrev"], game["away"]["abbrev"]
+        groups = {}
+        for p in raw:
+            try:
+                mins = float(p.get("minutes") or p.get("minutes_formatted") or 0)
+            except ValueError:
+                continue
+            cls = str(p.get("penalty_class") or "").lower()
+            if mins not in (2, 4, 5) or "misconduct" in cls:
+                continue
+            n = num(p.get("period_id") or (p.get("period") or {}).get("id")) or 0
+            if not n:
+                continue
+            start = before(n) + mmss(p.get("time") or p.get("time_off_formatted"))
+            is_home = str(p.get("home")) == "1" or str(p.get("team_id")) == home_id
+            team = home if is_home else away
+            who = (person_last(p.get("player_penalized_info")) or person_last(p.get("offender"))
+                   or person_last(p.get("player_served_info")) or ("Bench" if "bench" in cls else "Penalty"))
+            desc = strip_tags(p.get("lang_penalty_description") or p.get("description") or p.get("offence") or "")
+            kind = "MAJ" if mins == 5 else "MIN"
+            groups.setdefault((team, who, start), []).extend(
+                {"kind": kind, "minutes": m, "desc": desc} for m in ([2, 2] if mins == 4 else [int(mins)]))
+        goal_times = sorted((before(g["num"]) + mmss(g["time"]), g["team"], g["strength"]) for g in goals if g.get("num"))
+        out = []
+        for (team, who, start), parts in groups.items():
+            parts.sort(key=lambda x: (x["kind"] == "MAJ", x["minutes"]))
+            t = start
+            for part in parts:
+                end = t + part["minutes"] * 60
+                if part["kind"] == "MIN" and part["minutes"] == 2:
+                    for gt, gteam, strength in goal_times:
+                        if t < gt <= end and gteam != team and strength == "pp":
+                            end = gt
+                            break
+                t = end
+            if not (start <= now < t):
+                continue
+            descs = [x["desc"] for x in parts]
+            label = f"{descs[0]} (double minor)" if len(parts) == 2 and descs[0] == descs[1] and parts[0]["kind"] == "MIN" \
+                else ", ".join(dict.fromkeys(d for d in descs if d)) or "Penalty"
+            left = t - now
+            out.append({"team": team, "player": who, "infraction": label, "left": f"{left // 60}:{left % 60:02d}",
+                        "left_s": left})
+        return out
 
     # ---------- standings and leaders ----------
     def fetch_standings(self):
@@ -312,13 +434,13 @@ class Affiliate:
                         if g["id"] not in self.detail_cache:
                             try:
                                 self.fetch_detail(g)
-                                self.detail_cache[g["id"]] = {k: g.get(k) for k in ("goals", "periods", "shots", "lineups")} | \
+                                self.detail_cache[g["id"]] = {k: g.get(k) for k in ("goals", "periods", "shots", "lineups", "shootout")} | \
                                     {"away_sog": g["away"]["sog"], "home_sog": g["home"]["sog"]}
                             except Exception as e:
                                 log.info("%s final detail unavailable: %s", self.label, e)
                         c = self.detail_cache.get(g["id"])
                         if c:
-                            g.update({k: c[k] for k in ("goals", "periods", "shots", "lineups")})
+                            g.update({k: c[k] for k in ("goals", "periods", "shots", "lineups", "shootout")})
                             g["away"]["sog"], g["home"]["sog"] = c["away_sog"], c["home_sog"]
             except Exception as e:
                 log.warning("%s scores failed: %s", self.label, e)
