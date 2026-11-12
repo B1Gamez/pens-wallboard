@@ -79,6 +79,63 @@ def add_ranks(stats):
     return stats
 
 
+# ---------------------------------------------------------------- call-up helpers
+CALLUP_DAYS = int(os.environ.get("CALLUP_DAYS", "21"))
+VERB = re.compile(r"\b(recalled|recall|called up|promoted|loaned to|loaned|assigned|reassigned|returned|sent down|added|add|delete|deleted)\b", re.I)
+COND = re.compile(r"conditioning|injured reserve|\bLTIR\b|\bIR\b", re.I)
+
+
+def verb_direction(verb, tag):
+    """Which way a verb moves a player, from the point of view of the higher level."""
+    v = verb.lower()
+    if v in ("recalled", "recall", "called up", "promoted"):
+        return "up"
+    if tag == "ECHL" and v in ("loaned to", "delete", "deleted"):
+        return "up"           # an ECHL player loaned to (or recalled by) the AHL team
+    return "down"
+
+
+def tx_moves(transactions, names, tag, upper):
+    """(player key, date, 'up'/'down', conditioning?) for each transaction that names a player we know."""
+    wanted = {"NHL": ("NHL",), "ECHL": ("ECHL", "AHL")}[tag]
+    for t in transactions or []:
+        if t.get("tag") not in wanted or not t.get("date"):
+            continue
+        try:
+            d = date.fromisoformat(t["date"][:10])
+        except ValueError:
+            continue
+        for sentence in re.split(r"(?<=[.;])\s+", t.get("text") or ""):
+            flat = " " + norm(sentence) + " "
+            for key in names:
+                if not key or f" {key} " not in flat:
+                    continue
+                # Use the verb closest before the name (or the first after it, as in "...and assigned him")
+                pos = sentence.lower().find(names[key]["name"].lower().split()[-1].lower())
+                verbs = [(m.start(), m.group(0)) for m in VERB.finditer(sentence)]
+                if not verbs:
+                    continue
+                before = [v for v in verbs if v[0] <= pos]
+                after = [v for v in verbs if v[0] > pos]
+                verb = before[-1][1] if before else after[0][1]
+                if before and before[-1][1].lower() == "activated" and after:
+                    verb = after[0][1]
+                yield key, d, verb_direction(verb, tag), bool(COND.search(sentence))
+
+
+def roster_moves(history, upper, lower):
+    """(player key, date, 'up'/'down') whenever a daily snapshot shows someone switch levels."""
+    days = sorted(d for d, v in history.items() if upper in v)
+    for prev, cur in zip(days, days[1:]):
+        a, b = history[prev], history[cur]
+        for key in b[upper] - a[upper]:
+            if lower not in a or key in a.get(lower, set()) or lower not in b:
+                yield key, date.fromisoformat(cur), "up"
+        for key in a[upper] - b[upper]:
+            if key in b.get(lower, set()):
+                yield key, date.fromisoformat(cur), "down"
+
+
 # ---------------------------------------------------------------- playoffs
 def series_text(team, top, top_w, bot, bot_w, need=4):
     """'PIT leads 2-1', 'Series tied 1-1', 'PIT wins 4-2', 'NYR wins 4-1'."""
@@ -436,35 +493,92 @@ class Extras:
 
     # ---- call-ups ----
     def callups(self):
-        """Players who have moved between Pittsburgh, Wilkes-Barre/Scranton and Florida this season."""
-        ahl = next((a for a in self.affiliates if a.league == "ahl" and a.players), None)
-        echl = next((a for a in self.affiliates if a.league == "echl" and a.players), None)
+        """Players who moved between Pittsburgh, Wilkes-Barre/Scranton and Florida in the last
+        CALLUP_DAYS days. Move dates come from the transactions feed and from the board's own
+        daily roster snapshots; conditioning/IR stints drop off once the player is back up."""
+        ahl = next((a for a in self.affiliates if a.league == "ahl" and a.team), None)
+        echl = next((a for a in self.affiliates if a.league == "echl" and a.team), None)
+        stats = self.get(f"/club-stats/{self.team}/now")
+        nhl_players = {norm(full_name(p)): {"name": full_name(p), "gp": p.get("gamesPlayed") or 0,
+                                            "pos": p.get("positionCode") or ("G" if p in dicts(stats.get("goalies")) else "")}
+                       for p in dicts(stats.get("skaters")) + dicts(stats.get("goalies"))}
+        roster = self.get(f"/roster/{self.team}/current")
+        nhl_roster = {}
+        for grp in ("forwards", "defensemen", "goalies"):
+            for p in dicts(roster.get(grp)):
+                nhl_roster[norm(full_name(p))] = {"name": full_name(p), "pos": p.get("positionCode") or ""}
+
+        # Daily roster snapshots, so moves are caught even if the transactions feed misses them
+        levels = {self.team: set(nhl_roster)}
+        if ahl and ahl.roster:
+            levels[ahl.team["code"]] = set(ahl.roster)
+        if echl and echl.roster:
+            levels[echl.team["code"]] = set(echl.roster)
+        history = self.roster_history(levels)
+
+        today = date.today()
+        window = timedelta(days=CALLUP_DAYS)
         sections = []
+        pairs = []
         if ahl:
-            stats = self.get(f"/club-stats/{self.team}/now")
-            nhl_gp = {norm(full_name(p)): p.get("gamesPlayed") or 0
-                      for p in dicts(stats.get("skaters")) + dicts(stats.get("goalies"))}
-            roster = self.get(f"/roster/{self.team}/current")
-            on_nhl = {norm(full_name(p)) for g in ("forwards", "defensemen", "goalies") for p in dicts(roster.get(g))}
-            rows = []
-            for key, p in ahl.players.items():
-                if nhl_gp.get(key, 0) > 0:
-                    rows.append({"name": p["name"], "pos": p["pos"], "upper_gp": nhl_gp[key], "lower_gp": p["gp"],
-                                 "up": key in on_nhl})
-            if rows:
-                sections.append({"title": f"{self.team} and {ahl.team.get('code')}", "upper": self.team,
-                                 "lower": ahl.team.get("code"), "rows": sorted(rows, key=lambda r: (not r["up"], -r["upper_gp"]))})
+            pairs.append((self.team, ahl.team["code"], "NHL", nhl_players, ahl.players, set(nhl_roster)))
         if ahl and echl:
+            pairs.append((ahl.team["code"], echl.team["code"], "ECHL", ahl.players, echl.players,
+                          set(ahl.roster) if ahl.roster else None))
+        for upper, lower, tag, up_players, low_players, up_roster in pairs:
+            names = {}
+            for src in (up_players, low_players, nhl_roster if upper == self.team else {}):
+                for k, v in src.items():
+                    names.setdefault(k, v)
+            moves = {}
+            for k, d, direction, cond in tx_moves(self.data["transactions"], names, tag, upper):
+                moves.setdefault(k, []).append((d, direction, cond))
+            for k, d, direction in roster_moves(history, upper, lower):
+                moves.setdefault(k, []).append((d, direction, False))
             rows = []
-            for key, p in echl.players.items():
-                if ahl.players.get(key, {}).get("gp", 0) > 0:
-                    up = key in ahl.roster if ahl.roster else key not in echl.roster
-                    rows.append({"name": p["name"], "pos": p["pos"], "upper_gp": ahl.players[key]["gp"],
-                                 "lower_gp": p["gp"], "up": up})
+            for k, mv in moves.items():
+                mv.sort(key=lambda m: m[0])
+                last_date, last_dir, last_cond = mv[-1]
+                if today - last_date > window:
+                    continue
+                # A conditioning or injury stint that's over: back up, nothing to show
+                if last_dir == "up" and len(mv) > 1 and mv[-2][2] and today - mv[-2][0] <= window:
+                    continue
+                if up_roster is not None:
+                    up = k in up_roster
+                else:
+                    up = last_dir == "up"
+                info = names.get(k, {"name": k.title(), "pos": ""})
+                when = last_date.strftime("%b %-d") if os.name != "nt" else last_date.strftime("%b %#d")
+                label = (f"Conditioning stint, {when}" if last_cond and last_dir == "down"
+                         else f"{'Recalled' if last_dir == 'up' else 'Assigned'} {when}")
+                rows.append({"name": info["name"], "pos": info.get("pos", ""), "up": up, "label": label,
+                             "date": last_date.isoformat(),
+                             "upper_gp": up_players.get(k, {}).get("gp", 0), "lower_gp": low_players.get(k, {}).get("gp", 0)})
             if rows:
-                sections.append({"title": f"{ahl.team.get('code')} and {echl.team.get('code')}", "upper": ahl.team.get("code"),
-                                 "lower": echl.team.get("code"), "rows": sorted(rows, key=lambda r: (not r["up"], -r["upper_gp"]))})
+                sections.append({"title": f"{upper} and {lower}", "upper": upper, "lower": lower,
+                                 "rows": sorted(rows, key=lambda r: r["date"], reverse=True)})
         self.data["callups"] = sections
+
+    def roster_history(self, levels):
+        """Save today's rosters (names only) and return {date: {team: set(names)}} for the last 60 days."""
+        path = os.path.join(DATA, "roster_history.json")
+        try:
+            with open(path) as f:
+                hist = json.load(f)
+        except (OSError, ValueError):
+            hist = {}
+        day = date.today().isoformat()
+        hist.setdefault(day, {})
+        for team, names in levels.items():
+            if names:
+                hist[day][team] = sorted(names)
+        cutoff = (date.today() - timedelta(days=60)).isoformat()
+        hist = {d: v for d, v in hist.items() if d >= cutoff}
+        os.makedirs(DATA, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(hist, f)
+        return {d: {t: set(n) for t, n in v.items()} for d, v in hist.items()}
 
     # ---- offseason ----
     def offseason(self, schedule, season):

@@ -146,6 +146,7 @@ These go in the service file as `Environment=` lines (`sudo systemctl edit pens-
 | `FREE_AGENCY_DATE` | July 1 | For the offseason countdown |
 | `STREAM_DELAY` | `0` | Seconds to hold the board (and goal hooks) back to match your stream. Can also be changed live, see below |
 | `ADMIN_TOKEN` | none | Lets you trigger test goals from outside your home network (`?token=...`) |
+| `CALLUP_DAYS` | `21` | How long a call-up or assignment stays on the call-ups view |
 | `PORT` | `8080` | Web port |
 
 ## Where the data comes from

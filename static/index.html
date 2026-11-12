@@ -985,7 +985,8 @@ const LEG = {
   bracket: {items: [["Numbers", "series wins"]], note: "First to 4 wins moves on"},
   special: {items: [["Power play", "share of power plays scored on"], ["Penalty kill", "share of penalties killed off"],
                     ["1st, 2nd...", "league rank"]], note: "Gold marks the better team in each row"},
-  callups: {items: [["Up", "currently with the higher level"], ["GP", "games played at each level this season"]]},
+  callups: {items: [["Up", "currently with the higher level"], ["GP", "games played at each level this season"]],
+            note: "Moves from the last 21 days. Short conditioning or injury stints drop off once the player is back"},
   projected: {items: [["C1, P1, A1, M1", "division leaders"], ["2, 3", "next two in each division"], ["WC1, WC2", "wild cards"]],
               note: "The better division winner in each conference plays the second wild card"},
   affiliate: {items: [["GP", "games played"], ["W", "wins"], ["L", "regulation losses"], ["OT", "OT/SO losses"], ["PTS", "points"]]},
@@ -1254,7 +1255,7 @@ function panelViews() {
   if (C.some(sec => sec.rows.length)) views.push({title: "Call-ups and assignments", head: "",
     body: () => C.map(sec => `<tr class="sub"><th style="text-align:left;width:46%">${esc(sec.title)}</th><th style="width:26%">Now with</th><th style="width:14%">${esc(sec.upper)} GP</th><th style="width:14%">${esc(sec.lower)} GP</th></tr>` +
       sec.rows.map(r => `<tr><td class="tm">${esc(r.name)} <small>${esc(r.pos || "")}</small></td>
-        <td class="val" style="${r.up ? "color:var(--gold)" : ""}">${r.up ? "Up with " + esc(sec.upper) : esc(sec.lower)}</td>
+        <td class="val" style="${r.up ? "color:var(--gold)" : ""}">${r.up ? "Up with " + esc(sec.upper) : "With " + esc(sec.lower)}${r.label ? `<br><small style="font-size:1.7vh;color:var(--steel)">${esc(r.label)}</small>` : ""}</td>
         <td>${r.upper_gp}</td><td>${r.lower_gp}</td></tr>`).join("")).join(""),
     dwell: 16000, cls: "list callups", legend: LEG.callups});
   if (M.length) views.push({title: "Milestone watch", head: `<tr><th></th><th>Player</th><th>Career</th><th>To go</th></tr>`,
@@ -1487,6 +1488,15 @@ function unlockSound() {
   try { const ctx = new (window.AudioContext || window.webkitAudioContext)(); ctx.resume().then(() => ctx.close()); } catch (e) {}
 }
 ["click", "keydown", "touchstart"].forEach(ev => document.addEventListener(ev, unlockSound));
+
+// Friends watching through a link with ?sound=on: browsers only allow sound after a click,
+// so ask for one up front instead of missing the first goal.
+if (SOUND && !["localhost", "127.0.0.1", "::1"].includes(location.hostname)) {
+  window.addEventListener("load", () => {
+    const el = $("soundHint");
+    if (el) { el.textContent = "Click or tap anywhere to turn on the goal horns."; el.style.display = "block"; }
+  });
+}
 
 function playHorn(volume, file) {
   const c = S.config || {};

@@ -189,12 +189,12 @@ def extras(kind, now):
                            ("PHI", 16.2, 29, 80.1, 15, 2.78, 22, 3.05, 17), ("CAR", 24.5, 5, 84.0, 3, 3.40, 4, 2.60, 3)]},
         "callups": [
             {"title": "PIT and WBS", "upper": "PIT", "lower": "WBS", "rows": [
-                {"name": "Ville Koivunen", "pos": "LW", "upper_gp": 6, "lower_gp": 11, "up": True},
-                {"name": "Tristan Broz", "pos": "C", "upper_gp": 3, "lower_gp": 14, "up": False},
-                {"name": "Sergei Murashov", "pos": "G", "upper_gp": 1, "lower_gp": 9, "up": False}]},
+                {"name": "Ville Koivunen", "pos": "LW", "upper_gp": 6, "lower_gp": 11, "up": True, "label": "Recalled Nov 8"},
+                {"name": "Tristan Broz", "pos": "C", "upper_gp": 3, "lower_gp": 14, "up": False, "label": "Assigned Nov 6"},
+                {"name": "Sergei Murashov", "pos": "G", "upper_gp": 1, "lower_gp": 9, "up": False, "label": "Assigned Oct 30"}]},
             {"title": "WBS and FLA", "upper": "WBS", "lower": "FLA", "rows": [
-                {"name": "Gabriel D'Aigle", "pos": "G", "upper_gp": 2, "lower_gp": 5, "up": False},
-                {"name": "Atley Calvert", "pos": "RW", "upper_gp": 4, "lower_gp": 8, "up": True}]}],
+                {"name": "Gabriel D'Aigle", "pos": "G", "upper_gp": 2, "lower_gp": 5, "up": False, "label": "Assigned Nov 3"},
+                {"name": "Atley Calvert", "pos": "RW", "upper_gp": 4, "lower_gp": 8, "up": True, "label": "Recalled Nov 1"}]}],
     }
     if kind in ("gameday", "pregame"):
         out["lineup"] = {"game": hash(("PIT", "SJS")),
