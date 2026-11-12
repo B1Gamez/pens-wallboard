@@ -219,7 +219,9 @@
   .next.gameday .what img { width: 7vh; height: 7vh; }
   .next.gameday .what .vs { font-weight: 600; font-size: 3.4vh; }
   .next.gameday .when { margin-left: auto; font-size: 3.8vh; font-weight: 700; }
-  .next.gameday .rec { margin-left: 0; }
+  .next.gameday .rec { margin-left: 0; min-width: 0; overflow: hidden; }
+  .next.gameday .rec b, .next.gameday .rec span { overflow: hidden; text-overflow: ellipsis; }
+  .next.gameday .what { min-width: 0; }
 
   /* ---------- goal ---------- */
   #goal { position: fixed; inset: 0; background: var(--gold); color: var(--black); display: none; align-items: center; justify-content: center; flex-direction: column; z-index: 10; font-family: var(--display); }
@@ -1179,8 +1181,22 @@ function renderPanel() {
 }
 
 /* ---------- news ticker ---------- */
+// Affiliate helpers: the team's short tag, and a "vs Providence, Fri 7:05 PM" line for a game
+const affTag = a => (a.nickname && a.nickname.toLowerCase() !== "penguins") ? a.nickname : a.code;
+function affMatchup(a, g, withDay = true) {
+  const home = g.home.abbrev === a.code, opp = home ? g.away : g.home;
+  const d = new Date(g.start);
+  const day = isToday(g.start) ? (d.getHours() >= 17 ? "tonight" : "today") : d.toLocaleDateString([], {weekday: "short", month: "short", day: "numeric"});
+  return `${home ? "vs" : "at"} ${opp.city || opp.name || opp.abbrev}${withDay ? ", " + day : ""} ${localTime(g.start)}`;
+}
+
+function affiliateTickerItems() {
+  return (S.affiliates || []).filter(a => a.next && !a.live)
+    .map(a => ({tag: affTag(a), title: `Next game: ${affMatchup(a, a.next)}`, source: ""}));
+}
+
 function renderTicker() {
-  const news = S.news || [];
+  const news = [...affiliateTickerItems(), ...(S.news || [])];
   const key = JSON.stringify(news);
   if (key === newsKey) return;
   newsKey = key;
@@ -1251,6 +1267,27 @@ function renderBar() {
       <span class="what">${logoImg({abbrev: S.team})}${TEAM_NAMES[S.team]} <span class="vs">${home ? "vs" : "at"}</span> ${logoImg(opp)}${TEAM_NAMES[opp.abbrev] || opp.abbrev}</span>
       <span class="when"><span>${localTime(g.start)}${tv ? " on " + tv : ""}</span><small>${countdown(g.start)}</small></span>
       ${o ? `<span class="rec"><b>${TEAM_NAMES[opp.abbrev] || opp.abbrev} ${o.w}-${o.l}-${o.otl}</b><span>${ordinal(o.divSeq)} in the ${o.division}</span></span>` : ""}`;
+    return;
+  }
+
+  // Affiliate game day: the Pens are off, but WBS or the Everblades play later today
+  const affToday = (S.affiliates || [])
+    .map(a => ({a, g: (a.today || []).find(x => x.state === "FUT" && new Date(x.start) > Date.now())}))
+    .filter(x => x.g).sort((p, q) => new Date(p.g.start) - new Date(q.g.start));
+  const pensToday = (S.upcoming || [])[0] && isToday(S.upcoming[0].start);
+  if (affToday.length && !pensToday) {
+    const {a, g: ag} = affToday[0];
+    const home = ag.home.abbrev === a.code, us = home ? ag.home : ag.away, opp = home ? ag.away : ag.home;
+    const hour = new Date(ag.start).getHours();
+    const also = affToday[1] ? `Also: ${affTag(affToday[1].a)} ${affMatchup(affToday[1].a, affToday[1].g, false)}` : "";
+    const pn = (S.upcoming || [])[0];
+    const pens = pn ? `${TEAM_NAMES[S.team]}: ${pn.home === S.team ? "vs" : "at"} ${pn.home === S.team ? pn.away : pn.home}, ${new Date(pn.start).toLocaleDateString([], {weekday: "short"})}` : "";
+    el.className = "next gameday";
+    el.style.display = "flex";
+    el.innerHTML = `<span class="lbl">${hour >= 17 ? "Tonight" : "Today"}</span>
+      <span class="what">${logoImg(us)}${esc(a.code + " " + (us.name || ""))} <span class="vs">${home ? "vs" : "at"}</span> ${logoImg(opp)}${esc(opp.city || opp.name)}</span>
+      <span class="when">${localTime(ag.start)}<small>${a.league}${countdown(ag.start) ? ", " + countdown(ag.start).toLowerCase() : ""}</small></span>
+      ${also || pens ? `<span class="rec"><b>${esc(also || pens)}</b>${also && pens ? `<span>${esc(pens)}</span>` : ""}</span>` : ""}`;
     return;
   }
 
