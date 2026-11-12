@@ -6,4 +6,4 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=zack
-ExecStart=/home/zack/pens-wallboard/deploy/update.sh
+ExecStart=/bin/sh /home/zack/pens-wallboard/deploy/update.sh
