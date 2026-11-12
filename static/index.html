@@ -305,6 +305,8 @@
   .clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   table.list td:first-child { width: 46%; }
   table.prospects td:first-child { width: auto; }
+  table.callups td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  table.callups tr.sub th { font-size: 1.9vh; color: var(--steel); text-align: right; }
   table.prospects thead th:nth-child(1) { width: 2%; }
   table.prospects thead th:nth-child(2) { width: 40%; }
   table.prospects thead th:nth-child(3) { width: 28%; }
@@ -357,6 +359,34 @@
   .so-last small { font-family: var(--body); font-size: 1.8vh; color: var(--steel); font-weight: 400; }
   .so-next { font-size: 2.2vh; color: var(--steel); }
   .so-next b { color: var(--ice); }
+
+  /* ---------- pregame countdown ---------- */
+  #pregame { flex-direction: column; padding: 3.5vh 4vw 2.5vh; gap: 2.4vh; }
+  .pg-tag { position: relative; text-align: center; font-family: var(--display); font-size: 3vh; font-weight: 700; color: var(--gold); letter-spacing: .1em; }
+  .pg-tag b { display: inline-block; padding: .2vh .8vw; margin-right: .8vw; background: var(--gold); color: var(--black); border-radius: .4vh; }
+  .pg-match { position: relative; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 2vw; }
+  .pg-team { display: flex; flex-direction: column; align-items: center; gap: .8vh; }
+  .pg-team img { width: 15vh; height: 15vh; }
+  .pg-team .nm { font-family: var(--display); font-size: 5vh; font-weight: 700; }
+  .pg-team.us .nm { color: var(--gold); }
+  .pg-team .rec { font-size: 2.2vh; color: var(--steel); }
+  .pg-mid { text-align: center; }
+  .pg-mid .lbl { font-family: var(--display); font-size: 2.6vh; font-weight: 600; letter-spacing: .14em; color: var(--steel); }
+  .pg-mid .count { font-family: var(--display); font-size: 15vh; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .pg-mid .when { font-size: 2.4vh; color: var(--ice); margin-top: .6vh; }
+  .pg-body { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1.2fr; gap: 4vw; }
+  .pg-body h3 { font-family: var(--display); font-size: 3vh; font-weight: 700; margin-bottom: 1.2vh; }
+  .pg-goalie { display: flex; align-items: center; gap: 1vw; padding: 1vh 1.2vw; background: var(--tile); border-radius: .6vh; margin-bottom: 1vh; font-family: var(--display); font-size: 3vh; font-weight: 700; }
+  .pg-goalie img { width: 4.6vh; height: 4.6vh; }
+  .pg-goalie small { margin-left: auto; font-family: var(--body); font-size: 1.9vh; font-weight: 400; color: var(--steel); }
+  .pg-note { font-size: 2.2vh; color: var(--steel); margin-top: 1.4vh; }
+  table.pg-st { height: auto; }
+  table.pg-st th { font-family: var(--display); font-size: 2.6vh; font-weight: 700; color: var(--ice); text-align: center; padding-bottom: .8vh; }
+  table.pg-st th:first-child { text-align: left; }
+  table.pg-st td { font-size: 3.2vh; text-align: center; padding: .9vh .6vw; }
+  table.pg-st td:first-child { text-align: left; font-family: var(--body); font-size: 2.2vh; font-weight: 400; color: var(--steel); }
+  table.pg-st td small { font-family: var(--body); font-size: 1.7vh; font-weight: 400; color: var(--steel); margin-left: .4vw; }
+  table.pg-st td.better { color: var(--gold); }
 
   /* ---------- full playoff bracket ---------- */
   #bracketView { flex-direction: column; padding: 3.5vh 2.5vw 2.5vh; gap: 2vh; }
@@ -475,6 +505,17 @@
   <div class="next" id="next"></div>
 </section>
 
+<section id="pregame" class="view">
+  <div class="corner-clock" data-clock></div>
+  <div class="pg-tag" id="pgTag"></div>
+  <div class="pg-match" id="pgMatch"></div>
+  <div class="pg-body">
+    <div id="pgLeft"></div>
+    <div id="pgRight"></div>
+  </div>
+  <div class="legend" id="pgLegend"></div>
+</section>
+
 <section id="bracketView" class="view">
   <div class="br-head"><div class="br-title" id="brTitle"></div><div class="br-sub" id="brSub"></div></div>
   <div class="br-grid" id="brGrid"></div>
@@ -512,7 +553,7 @@ let lastAffGoal = null;
 const DELAY_PARAM = (() => { const d = new URLSearchParams(location.search).get("delay"); return d != null ? `?delay=${encodeURIComponent(d)}` : ""; })();
 let S = null, build = null, lastGoal = null, rotIdx = 0, rotTimer = null, goalUntil = 0, newsKey = "";
 
-document.querySelectorAll("#board, #summary, #league, #bracketView").forEach(v => v.prepend($("rinkTpl").content.cloneNode(true)));
+document.querySelectorAll("#board, #summary, #league, #bracketView, #pregame").forEach(v => v.prepend($("rinkTpl").content.cloneNode(true)));
 
 const ordinal = n => { const s = ["th","st","nd","rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
 const periodLabel = g => g.periodType === "OT" ? "Overtime" : g.periodType === "SO" ? "Shootout" : `${ordinal(g.period)} period`;
@@ -549,6 +590,15 @@ function tick() {
   const t = now.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
   document.querySelectorAll("[data-clock]").forEach(el => el.textContent = t);
   $("date").textContent = $("nDate").textContent = now.toLocaleDateString([], {weekday: "long", month: "short", day: "numeric"});
+  const pc = document.getElementById("pgCount");
+  if (pc && pc.dataset.target) pc.textContent = countdownClock(+pc.dataset.target);
+}
+
+function countdownClock(target) {
+  let s = Math.max(0, Math.round((target - Date.now()) / 1000));
+  if (!s) return "0:00";
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); s %= 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
 }
 
 /* ---------- live / pregame scoreboard ---------- */
@@ -640,6 +690,78 @@ function renderBoard(g, mode, opts = {}) {
   const tagged = goals.some(x => x.strength === "pp" || x.strength === "sh" || x.en || x.total);
   $("recent").innerHTML = mode === "live" && goals.length
     ? `<div class="lbl">Scoring</div>` + goals.map(x => goalLine(x, g.league)).join("") + (tagged ? `<div class="legend">${legendHTML(LEG.scoring)}</div>` : "") : "";
+}
+
+/* ---------- pregame countdown ---------- */
+function affiliatePregame(cfg) {
+  const win = (cfg.pregame_minutes || 90) * 60000;
+  for (const a of S.affiliates || []) {
+    const g = (a.today || []).find(x => x.state === "FUT" && new Date(x.start) - Date.now() < win && new Date(x.start) - Date.now() > -15 * 60000);
+    if (g) return {a, g};
+  }
+  return null;
+}
+
+function recordOf(row) { return row ? `${row.w}-${row.l}-${row.otl}, ${row.pts} pts` : ""; }
+
+function pensPregameInfo(g) {
+  const L = S.lineup && S.lineup.game === g.id ? S.lineup : null;
+  const O = S.opponent;
+  let series = "";
+  if (O && (O.h2h || []).length) {
+    const t = r => O.h2h.filter(x => x.r === r).length;
+    series = `Season series: ${TEAM_NAMES[S.team]} ${t("W")}-${t("L")}-${t("OTL")}`;
+  } else if (O) series = "First meeting this season";
+  return {us: S.team, tag: "", records: {away: recordOf(teamRow(g.away.abbrev)), home: recordOf(teamRow(g.home.abbrev))},
+          stats: S.team_stats || {}, goalies: L ? {away: L.away, home: L.home} : null, series, tv: pickTv(g)};
+}
+
+function affPregameInfo(a, g) {
+  const rows = (a.standings && a.standings.rows) || [];
+  const rec = abbrev => recordOf(rows.find(r => r.abbrev === abbrev));
+  return {us: a.code, tag: a.league, records: {away: rec(g.away.abbrev), home: rec(g.home.abbrev)},
+          stats: a.team_stats || {}, goalies: null, series: "", tv: "",
+          leaders: {title: `${affTag(a)} top scorers`, rows: a.leaders || []}};
+}
+
+function renderPregame(g, info) {
+  const target = new Date(g.start).getTime() + (S.delay || 0) * 1000;   // matches the stream delay
+  $("pgTag").innerHTML = `${info.tag ? `<b>${info.tag}</b>` : ""}PREGAME`;
+  const team = k => `<div class="pg-team ${g[k].abbrev === info.us ? "us" : ""}">${logoImg(g[k])}
+    <div class="nm">${esc(nameOf(g[k]))}</div><div class="rec">${esc(info.records[k] || "")}</div></div>`;
+  $("pgMatch").innerHTML = `${team("away")}<div class="pg-mid"><div class="lbl">PUCK DROP IN</div>
+    <div class="count" id="pgCount" data-target="${target}">${countdownClock(target)}</div>
+    <div class="when">${localTime(g.start)}${info.tv ? " on " + esc(info.tv) : ""}</div></div>${team("home")}`;
+
+  // Goalies (NHL) or the season series
+  let left = "";
+  if (info.goalies) {
+    const row = k => {
+      const side = info.goalies[k], x = side && (side.goalies || [])[0];
+      if (!x) return "";
+      const sv = x.svp != null ? Number(x.svp).toFixed(3).replace(/^0/, "") + " SV%" : "";
+      return `<div class="pg-goalie">${logoImg(g[k])}${esc(x.name)}<small>${esc([x.record, sv].filter(Boolean).join(", "))}</small></div>`;
+    };
+    const rows = row("away") + row("home");
+    if (rows) left += `<h3>${info.goalies.away && info.goalies.away.confirmed ? "Starting goalies" : "Goalies"}</h3>${rows}`;
+  }
+  if (info.leaders && info.leaders.rows.length)
+    left += `<h3>${esc(info.leaders.title)}</h3>` + info.leaders.rows.map(p =>
+      `<div class="pg-goalie">${esc(p.name)}<small>${p.g ?? "-"} G, ${p.a ?? "-"} A, ${p.pts} PTS</small></div>`).join("");
+  if (info.series) left += `<div class="pg-note">${esc(info.series)}</div>`;
+  $("pgLeft").innerHTML = left;
+
+  // Special teams comparison with league ranks
+  const A = info.stats[g.away.abbrev] || {}, H = info.stats[g.home.abbrev] || {};
+  const line = (label, key, unit, highGood = true) => {
+    if (A[key] == null && H[key] == null) return "";
+    const better = A[key] == null || H[key] == null ? null : (A[key] === H[key] ? null : ((A[key] > H[key]) === highGood ? "away" : "home"));
+    const cell = (v, r, side) => `<td class="${better === side ? "better" : ""}">${v != null ? v + unit : "-"}${r ? `<small>${ordinal(r)}</small>` : ""}</td>`;
+    return `<tr><td>${label}</td>${cell(A[key], A[key + "_rank"], "away")}${cell(H[key], H[key + "_rank"], "home")}</tr>`;
+  };
+  const rows = line("Power play", "pp", "%") + line("Penalty kill", "pk", "%") + line("Goals for per game", "gf", "") + line("Goals against per game", "ga", "", false);
+  $("pgRight").innerHTML = rows ? `<h3>Special teams and scoring</h3><table class="pg-st"><thead><tr><th></th><th>${g.away.abbrev}</th><th>${g.home.abbrev}</th></tr></thead><tbody>${rows}</tbody></table>` : "";
+  $("pgLegend").innerHTML = rows ? legendHTML(LEG.special) : "";
 }
 
 /* ---------- shootout ---------- */
@@ -861,6 +983,9 @@ const LEG = {
   prospects: {items: [["GP", "games this season"], ["Stats", "goals-assists-points"], ["SV%", "share of shots saved (goalies)"]]},
   goalies: {items: [["Record", "wins-losses-OT losses"], ["SV%", "share of shots saved (.910 = 91%)"], ["GAA", "goals allowed per game"]]},
   bracket: {items: [["Numbers", "series wins"]], note: "First to 4 wins moves on"},
+  special: {items: [["Power play", "share of power plays scored on"], ["Penalty kill", "share of penalties killed off"],
+                    ["1st, 2nd...", "league rank"]], note: "Gold marks the better team in each row"},
+  callups: {items: [["Up", "currently with the higher level"], ["GP", "games played at each level this season"]]},
   projected: {items: [["C1, P1, A1, M1", "division leaders"], ["2, 3", "next two in each division"], ["WC1, WC2", "wild cards"]],
               note: "The better division winner in each conference plays the second wild card"},
   affiliate: {items: [["GP", "games played"], ["W", "wins"], ["L", "regulation losses"], ["OT", "OT/SO losses"], ["PTS", "points"]]},
@@ -938,6 +1063,12 @@ function opponentBody(O) {
               + info("Standing", `${ordinal(t.divSeq)} in the ${t.division}`)
               + info("Last 10", t.l10) + info("Streak", t.streak || "–");
   rows += info("Season series", series);
+  const ts = S.team_stats || {}, U = ts[S.team], V = ts[O.abbrev];
+  if (U && V) {
+    const fmt = (x, key, unit) => x[key] != null ? `${x[key]}${unit}${x[key + "_rank"] ? ` <small>${ordinal(x[key + "_rank"])}</small>` : ""}` : "-";
+    rows += info("Power play", `${S.team} ${fmt(U, "pp", "%")}   ${O.abbrev} ${fmt(V, "pp", "%")}`);
+    rows += info("Penalty kill", `${S.team} ${fmt(U, "pk", "%")}   ${O.abbrev} ${fmt(V, "pk", "%")}`);
+  }
   if ((O.scorers || []).length) {
     rows += `<tr class="sub"><th colspan="2">Top scorers</th><th style="text-align:right">PTS</th></tr>`;
     rows += O.scorers.map(p => `<tr><td class="tm"><div>${headImg(p.headshot)}<span>${esc(p.name)} <small>${p.g}G ${p.a}A</small></span></div></td><td></td><td class="p">${p.pts}</td></tr>`).join("");
@@ -1119,6 +1250,13 @@ function panelViews() {
   if ((S.on_this_day || []).length && !S.offseason)
     views.push({title: "On this day", head: "", body: () => S.on_this_day.map(l => `<tr><td class="tm">${esc(l)}</td></tr>`).join(""),
       dwell: 12000, cls: "list"});
+  const C = S.callups || [];
+  if (C.some(sec => sec.rows.length)) views.push({title: "Call-ups and assignments", head: "",
+    body: () => C.map(sec => `<tr class="sub"><th style="text-align:left;width:46%">${esc(sec.title)}</th><th style="width:26%">Now with</th><th style="width:14%">${esc(sec.upper)} GP</th><th style="width:14%">${esc(sec.lower)} GP</th></tr>` +
+      sec.rows.map(r => `<tr><td class="tm">${esc(r.name)} <small>${esc(r.pos || "")}</small></td>
+        <td class="val" style="${r.up ? "color:var(--gold)" : ""}">${r.up ? "Up with " + esc(sec.upper) : esc(sec.lower)}</td>
+        <td>${r.upper_gp}</td><td>${r.lower_gp}</td></tr>`).join("")).join(""),
+    dwell: 16000, cls: "list callups", legend: LEG.callups});
   if (M.length) views.push({title: "Milestone watch", head: `<tr><th></th><th>Player</th><th>Career</th><th>To go</th></tr>`,
     body: () => M.map(m => `<tr>
       <td class="rank"></td>
@@ -1469,16 +1607,26 @@ function render() {
   const takeover = !gameView && cfg.affiliate_takeover ? (affLive || affFinal || null) : null;
   const affGame = takeover ? (takeover.live || takeover.recent_final) : null;
   const affSummary = !!(affGame && (affGame.state === "FINAL" || affGame.intermission));
-  const night = !gameView && !takeover && isNight();
-  const B = !gameView && !takeover && !night ? bracketData() : null;
-  const bracketNow = !!(B && bracketTurn(B.live));
-  $("board").classList.toggle("on", !!((gameView && !summary) || (takeover && !affSummary)));
+  // Pregame countdown: the Pens' pregame, or an affiliate's when the Pens aren't on
+  const pensPre = gameView && S.mode === "pregame";
+  const affPre = !gameView && !takeover && cfg.affiliate_takeover ? affiliatePregame(cfg) : null;
+  const pregame = pensPre || !!affPre;
+  // The remote can pin the off-game screen to one view
+  const forced = cfg.view || "auto";
+  const offGame = !gameView && !takeover && !affPre;
+  const night = offGame && (forced === "night" || (forced === "auto" && isNight()));
+  const B = offGame && !night && forced !== "league" ? bracketData() : null;
+  const bracketNow = !!(B && (forced === "bracket" || bracketTurn(B.live)));
+  $("pregame").classList.toggle("on", pregame);
+  $("board").classList.toggle("on", !pregame && !!((gameView && !summary) || (takeover && !affSummary)));
   $("summary").classList.toggle("on", !!summary || affSummary);
-  $("league").classList.toggle("on", !gameView && !takeover && !night && !bracketNow);
+  $("league").classList.toggle("on", offGame && !night && !bracketNow);
   $("bracketView").classList.toggle("on", bracketNow);
   if (bracketNow) renderBracket(B);
   $("night").classList.toggle("on", night);
-  if (summary) { renderSummary(g, S.mode); leagueShown = false; }
+  if (pensPre) { renderPregame(g, pensPregameInfo(g)); leagueShown = false; }
+  else if (affPre) { renderPregame(affPre.g, affPregameInfo(affPre.a, affPre.g)); leagueShown = false; }
+  else if (summary) { renderSummary(g, S.mode); leagueShown = false; }
   else if (gameView) { renderBoard(g, S.mode); leagueShown = false; }
   else if (takeover && affSummary) {
     renderSummary(affGame, affGame.state === "FINAL" ? "final" : "live", {us: takeover.code, tag: takeover.league,

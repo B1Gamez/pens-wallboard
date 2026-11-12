@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from datetime import datetime, timezone, timedelta
 
 HT = "https://lscluster.hockeytech.com/feed/index.php"
@@ -54,6 +55,21 @@ def person_last(p):
     if not isinstance(p, dict):
         return ""
     return p.get("last_name") or p.get("lastName") or ""
+
+
+def norm(name):
+    """Player names compared across feeds: no accents, punctuation or case."""
+    s = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z ]", "", s).strip()
+
+
+def pct(v):
+    """'21.3' or '0.213' or 21.3 -> 21.3"""
+    try:
+        f = float(str(v).strip().rstrip("%"))
+    except (TypeError, ValueError):
+        return None
+    return round(f * 100, 1) if f <= 1 else round(f, 1)
 
 
 def strip_tags(s):
@@ -121,8 +137,11 @@ class Affiliate:
         self.final_at = {}           # game id -> when we saw it go final
         self.detail_cache = {}       # game id -> details fetched after the final
         self.postgame_minutes = 30
-        self.logos = {}          # team code -> logo URL, for every team in the league
-        self.next = {"meta": 0, "scores": 0, "standings": 0, "leaders": 0}
+        self.logos = {}
+        self.players = {}           # normalized name -> {"name", "gp", "pos"} for this season, our team
+        self.roster = set()         # normalized names currently on our roster
+        self.team_stats = {}        # team code -> {"pp", "pk", "gf", "ga"} across the league          # team code -> logo URL, for every team in the league
+        self.next = {"meta": 0, "scores": 0, "standings": 0, "leaders": 0, "players": 0}
 
     def logo_for(self, team_id, given=None):
         """Use the feed's logo, or HockeyTech's standard logo address for that team."""
@@ -368,6 +387,22 @@ class Affiliate:
         data = self.get(feed="statviewfeed", view="teams", groupTeamsBy="division", context="overall",
                         site_id=0, season=self.season, special="false")
         code = self.team.get("code")
+        # League-wide numbers for the pregame comparison, from every division's rows
+        stats = {}
+        for block in (data if isinstance(data, list) else [data]):
+            for sec in (block.get("sections") or []) if isinstance(block, dict) else []:
+                for d in sec.get("data") or []:
+                    r = d.get("row", d) if isinstance(d, dict) else {}
+                    c, gp = r.get("team_code"), num(r.get("games_played")) or 0
+                    if not c:
+                        continue
+                    gf, ga = num(r.get("goals_for")), num(r.get("goals_against"))
+                    stats[c] = {"pp": pct(r.get("power_play_pct")), "pk": pct(r.get("penalty_kill_pct")),
+                                "gf": round(gf / gp, 2) if gf is not None and gp else None,
+                                "ga": round(ga / gp, 2) if ga is not None and gp else None}
+        if stats:
+            from extras import add_ranks
+            self.team_stats = add_ranks(stats)
         for block in (data if isinstance(data, list) else [data]):
             for sec in (block.get("sections") or []) if isinstance(block, dict) else []:
                 rows = [d.get("row", d) for d in sec.get("data") or [] if isinstance(d, dict)]
@@ -404,6 +439,40 @@ class Affiliate:
             if len(out) >= 3:
                 break
         self.leaders = out
+
+    def fetch_players(self):
+        """Everyone who has played for our team this season, with games played, and the current roster."""
+        players = {}
+        for kind in ("topscorers", "topgoalies"):
+            try:
+                rows = (self.get(feed="modulekit", view="statviewtype", type=kind, season_id=self.season,
+                                 team_id=self.team["id"], first=0, limit=100, sort="games_played", stat="all")
+                        .get("SiteKit") or {}).get("Statviewtype") or []
+            except Exception as e:
+                log.info("%s %s unavailable: %s", self.label, kind, e)
+                continue
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                team = str(r.get("team_id") or r.get("team_code") or "")
+                if team and team not in (self.team["id"], self.team.get("code")):
+                    continue
+                name = strip_tags(r.get("name")) or f"{r.get('first_name', '')} {r.get('last_name', '')}".strip()
+                gp = num(r.get("games_played")) or 0
+                if name and gp:
+                    players[norm(name)] = {"name": name, "gp": gp,
+                                           "pos": "G" if kind == "topgoalies" else (r.get("position") or "")}
+        if players:
+            self.players = players
+        try:
+            rows = (self.get(feed="modulekit", view="roster", team_id=self.team["id"], season_id=self.season)
+                    .get("SiteKit") or {}).get("Roster") or []
+            names = {norm(f"{r.get('first_name', '')} {r.get('last_name', '')}") for r in rows
+                     if isinstance(r, dict) and r.get("last_name")}
+            if names:
+                self.roster = names
+        except Exception as e:
+            log.info("%s roster unavailable: %s", self.label, e)
 
     # ---------- the update loop ----------
     def update(self, now_ts):
@@ -452,6 +521,13 @@ class Affiliate:
             except Exception as e:
                 log.warning("%s standings failed: %s", self.label, e)
             self.next["standings"] = now_ts + 30 * 60
+
+        if self.team and self.season and now_ts >= self.next["players"]:
+            try:
+                self.fetch_players()
+            except Exception as e:
+                log.info("%s players unavailable: %s", self.label, e)
+            self.next["players"] = now_ts + 6 * 3600
 
         if self.team and self.season and now_ts >= self.next["leaders"]:
             try:
@@ -513,4 +589,5 @@ class Affiliate:
             "last": done[-1] if done else None,
             "next": upcoming[0] if upcoming else None,
             "standings": self.standings, "leaders": self.leaders,
+            "team_stats": self.team_stats,
         }

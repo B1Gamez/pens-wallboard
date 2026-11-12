@@ -12,6 +12,7 @@ Run:   python app.py                       (real data)
        DEMO=echl         python app.py     (fake Everblades game live on its own)
        DEMO=playoffs     python app.py     (fake playoff game and bracket)
        DEMO=offseason    python app.py     (fake summer: countdowns, prospects, history)
+       DEMO=pregame      python app.py     (fake Pens game starting in 8 minutes)
        DEMO=shootout     python app.py     (fake shootout, a new attempt every 10 seconds)
        DEMO=midseason    python app.py     (fake second half of the season, with the projected bracket)
 Then open http://localhost:8080
@@ -217,6 +218,7 @@ def slim_team(t):
         "otl": t.get("otLosses"), "pts": t.get("points"),
         "streak": f"{t.get('streakCode', '')}{t.get('streakCount', '')}",
         "l10": f"{t.get('l10Wins', 0)}-{t.get('l10Losses', 0)}-{t.get('l10OtLosses', 0)}",
+        "full": text(t.get("teamName")),
     }
 
 
@@ -543,23 +545,32 @@ SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data",
 history = deque(maxlen=MAX_DELAY // 2 + 10)      # (time, snapshot of state) every 2 seconds
 
 
-def load_delay():
+def load_settings():
     try:
         with open(SETTINGS_FILE) as f:
-            return max(0, min(MAX_DELAY, int(json.load(f).get("delay", STREAM_DELAY))))
-    except (OSError, ValueError, TypeError):
-        return STREAM_DELAY
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
-current_delay = load_delay()
+settings = load_settings()
+current_delay = max(0, min(MAX_DELAY, int(settings.get("delay", STREAM_DELAY) or 0)))
+controls = {"horn_muted": bool(settings.get("horn_muted", False)),
+            "view": settings.get("view", "auto") if settings.get("view") in ("auto", "league", "bracket", "night") else "auto",
+            "reload": 0}
+
+
+def save_settings():
+    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump({"delay": current_delay, "horn_muted": controls["horn_muted"], "view": controls["view"]}, f)
 
 
 def save_delay(seconds):
     global current_delay
     current_delay = max(0, min(MAX_DELAY, int(seconds)))
-    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump({"delay": current_delay}, f)
+    save_settings()
 
 
 def record_history():
@@ -897,17 +908,18 @@ def build_id():
         mtime = int(os.path.getmtime(os.path.join(app.static_folder, "index.html")))
     except OSError:
         mtime = 0
-    return f"{STARTED}-{mtime}"
+    return f"{STARTED}-{mtime}-{controls['reload']}"
 
 
 def config():
     return {"night": NIGHT, "night_start": NIGHT_START, "night_end": NIGHT_END,
-            "horn": GOAL_HORN, "horn_volume": HORN_VOLUME, "horn_max_seconds": HORN_MAX_SECONDS,
+            "horn": GOAL_HORN and not controls["horn_muted"], "horn_volume": HORN_VOLUME, "horn_max_seconds": HORN_MAX_SECONDS,
             "horn_file": os.path.exists(os.path.join(app.static_folder, "horn.mp3")),
             # Team horns: static/horn-ahl.mp3, static/horn-echl.mp3 (or horn-<team code>.mp3)
             "horn_files": sorted(f[5:-4].lower() for f in os.listdir(app.static_folder)
                                  if f.lower().startswith("horn-") and f.lower().endswith(".mp3")),
-            "affiliate_takeover": AFFILIATE_TAKEOVER, "affiliate_horn": AFFILIATE_HORN,
+            "affiliate_takeover": AFFILIATE_TAKEOVER, "affiliate_horn": AFFILIATE_HORN and not controls["horn_muted"],
+            "pregame_minutes": PREGAME_MINUTES, "view": controls["view"], "horn_muted": controls["horn_muted"],
             "affiliate_horn_volume": AFFILIATE_HORN_VOLUME}
 
 
@@ -991,6 +1003,37 @@ def test_goal():
         if AFFILIATE_HOOKS:
             fire_goal_hooks_later(team)
     return jsonify({"ok": True, "team": team})
+
+
+@app.route("/remote")
+def remote():
+    """Phone remote. Home network only."""
+    if not allowed_to_control():
+        return "The remote only works from your home network.", 403
+    return send_from_directory(app.static_folder, "remote.html")
+
+
+@app.route("/api/control", methods=["GET", "POST"])
+def api_control():
+    """GET: current remote settings. POST JSON: {"horn_muted": true, "view": "auto|league|bracket|night", "reload": true}."""
+    if request.method == "POST":
+        if not allowed_to_control():
+            return jsonify({"ok": False, "error": "Not allowed from outside the home network"}), 403
+        body = request.get_json(silent=True) or {}
+        if "horn_muted" in body:
+            controls["horn_muted"] = bool(body["horn_muted"])
+        if body.get("view") in ("auto", "league", "bracket", "night"):
+            controls["view"] = body["view"]
+        if body.get("reload"):
+            controls["reload"] += 1          # changes the build id, so every open screen reloads
+        save_settings()
+    with lock:
+        live = state["mode"] in ("live", "pregame", "final")
+        teams = [{"code": TEAM, "name": "Penguins" if TEAM == "PIT" else TEAM}] + \
+                [{"code": a.get("code"), "name": a.get("nickname") if (a.get("nickname") or "").lower() not in ("", "penguins")
+                  else a.get("code")} for a in state["affiliates"]]
+    return jsonify({"ok": True, "delay": current_delay, "horn_muted": controls["horn_muted"], "view": controls["view"],
+                    "game_on": live, "teams": teams})
 
 
 @app.route("/")

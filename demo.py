@@ -149,6 +149,8 @@ def affiliates(kind, now):
         {"league": "AHL", "code": "WBS", "name": "Wilkes-Barre/Scranton Penguins", "nickname": "Penguins", "logo": demo_logo("AHL", "WBS"),
          "live": wbs_live, "today": [wbs_live] if wbs_live else [wbs_final], "yesterday": [wbs_final],
          "last": wbs_final, "next": aff_game("AHL", "WBS", "PRO", None, None, "FUT", start=now + timedelta(days=2)),
+         "team_stats": {"WBS": {"pp": 22.1, "pp_rank": 6, "pk": 83.5, "pk_rank": 9, "gf": 3.21, "gf_rank": 5, "ga": 2.71, "ga_rank": 10},
+                        "PRO": {"pp": 19.4, "pp_rank": 14, "pk": 85.0, "pk_rank": 4, "gf": 3.40, "gf_rank": 2, "ga": 2.50, "ga_rank": 3}},
          "standings": wbs_div, "leaders": [{"name": "Ville Koivunen", "g": 7, "a": 10, "pts": 17},
                                            {"name": "Tristan Broz", "g": 6, "a": 7, "pts": 13}]},
         {"league": "ECHL", "code": "FLA", "name": "Florida Everblades", "nickname": "Everblades", "logo": demo_logo("ECHL", "FLA"),
@@ -181,8 +183,20 @@ def extras(kind, now):
         "on_this_day": ["1988: Mario Lemieux scores five goals five different ways against New Jersey",
                         "1995: Penguins beat NYR 7-2"],
         "lineup": None, "playoffs": None, "offseason": None,
+        "team_stats": {a: {"pp": pp, "pp_rank": ppr, "pk": pk, "pk_rank": pkr, "gf": gf, "gf_rank": gfr, "ga": ga, "ga_rank": gar}
+                       for a, pp, ppr, pk, pkr, gf, gfr, ga, gar in [
+                           ("PIT", 21.3, 12, 78.4, 21, 2.94, 18, 3.31, 24), ("SJS", 18.0, 25, 74.9, 30, 2.61, 28, 3.58, 31),
+                           ("PHI", 16.2, 29, 80.1, 15, 2.78, 22, 3.05, 17), ("CAR", 24.5, 5, 84.0, 3, 3.40, 4, 2.60, 3)]},
+        "callups": [
+            {"title": "PIT and WBS", "upper": "PIT", "lower": "WBS", "rows": [
+                {"name": "Ville Koivunen", "pos": "LW", "upper_gp": 6, "lower_gp": 11, "up": True},
+                {"name": "Tristan Broz", "pos": "C", "upper_gp": 3, "lower_gp": 14, "up": False},
+                {"name": "Sergei Murashov", "pos": "G", "upper_gp": 1, "lower_gp": 9, "up": False}]},
+            {"title": "WBS and FLA", "upper": "WBS", "lower": "FLA", "rows": [
+                {"name": "Gabriel D'Aigle", "pos": "G", "upper_gp": 2, "lower_gp": 5, "up": False},
+                {"name": "Atley Calvert", "pos": "RW", "upper_gp": 4, "lower_gp": 8, "up": True}]}],
     }
-    if kind == "gameday":
+    if kind in ("gameday", "pregame"):
         out["lineup"] = {"game": hash(("PIT", "SJS")),
                          "away": {"confirmed": False, "goalies": [{"name": "Tristan Jarry", "record": "5-5-1", "gaa": 3.01, "svp": 0.902}]},
                          "home": {"confirmed": False, "goalies": [{"name": "Yaroslav Askarov", "record": "4-7-1", "gaa": 3.20, "svp": 0.897}]}}
@@ -326,6 +340,13 @@ def run(kind, state, lock):
                     state["aff_goal"] = {"team": "WBS", "league": "AHL", "us": wbs["away"]["score"],
                                          "them": wbs["home"]["score"], "opp": "HER"}
                 state.update(mode="off", game=None, scores=others)
+            elif kind == "pregame":
+                soon = datetime.now(timezone.utc) + timedelta(minutes=8)
+                pg = game("PIT", "SJS", None, None, "PRE", start=soon)
+                pg["away"]["name"], pg["home"]["name"] = "Penguins", "Sharks"
+                state["opponent"] = {"abbrev": "SJS", "start": soon.isoformat(), "scorers": [],
+                                     "h2h": [{"r": "W", "opp": "SJS", "us": 4, "them": 2, "start": ""}]}
+                state.update(mode="pregame", game=pg, scores=others + [pg])
             elif kind == "gameday":
                 today = game("PIT", "SJS", None, None, "FUT", start=tonight)
                 today["away"]["name"], today["home"]["name"] = "Penguins", "Sharks"

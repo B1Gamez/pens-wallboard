@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from datetime import date, datetime, timezone, timedelta
 
 log = logging.getLogger("wallboard.extras")
@@ -42,6 +43,40 @@ def parse_time(s):
 
 def full_name(p):
     return f"{text(p.get('firstName'))} {text(p.get('lastName'))}".strip() or text(p.get("name"))
+
+
+def dicts(x):
+    return [i for i in x if isinstance(i, dict)] if isinstance(x, list) else []
+
+
+def norm(name):
+    s = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z ]", "", s).strip()
+
+
+def pct_of(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return round(f * 100, 1) if f <= 1 else round(f, 1)
+
+
+def rnd(v):
+    try:
+        return round(float(v), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def add_ranks(stats):
+    """Rank every team 1-32 in each stat (higher is better except goals against)."""
+    for key, high_good in (("pp", True), ("pk", True), ("gf", True), ("ga", False)):
+        vals = sorted((v[key] for v in stats.values() if v.get(key) is not None), reverse=high_good)
+        for v in stats.values():
+            if v.get(key) is not None:
+                v[key + "_rank"] = vals.index(v[key]) + 1
+    return stats
 
 
 # ---------------------------------------------------------------- playoffs
@@ -187,7 +222,8 @@ class Extras:
         self.history.load()
         self.history_started = False
         self.data = {"playoffs": None, "injuries": [], "opp_injuries": [], "transactions": [],
-                     "prospects": [], "on_this_day": [], "offseason": None, "lineup": None}
+                     "prospects": [], "on_this_day": [], "offseason": None, "lineup": None,
+                     "team_stats": {}, "callups": []}
         self.lineup_game = None
 
     def due(self, key, minutes):
@@ -381,6 +417,55 @@ class Extras:
                  "gaa": g.get("gaa"), "svp": g.get("savePctg")} for g in leaders[:2]]}
         self.data["lineup"] = {"game": gid, **out}
 
+    # ---- special teams (NHL) ----
+    def team_stats(self, season):
+        """Power play, penalty kill and goals per game for every team, with league ranks."""
+        r = self.s.get("https://api.nhle.com/stats/rest/en/team/summary",
+                       params={"cayenneExp": f"seasonId={season} and gameTypeId=2"}, timeout=12)
+        r.raise_for_status()
+        rows = [x for x in r.json().get("data") or [] if isinstance(x, dict)]
+        out = {}
+        for x in rows:
+            full = str(x.get("teamFullName") or "").lower()
+            abbrev = next((a for a, nick in NAMES.items() if full.endswith(nick)), None)
+            if not abbrev:
+                continue
+            out[abbrev] = {"pp": pct_of(x.get("powerPlayPct")), "pk": pct_of(x.get("penaltyKillPct")),
+                           "gf": rnd(x.get("goalsForPerGame")), "ga": rnd(x.get("goalsAgainstPerGame"))}
+        self.data["team_stats"] = add_ranks(out)
+
+    # ---- call-ups ----
+    def callups(self):
+        """Players who have moved between Pittsburgh, Wilkes-Barre/Scranton and Florida this season."""
+        ahl = next((a for a in self.affiliates if a.league == "ahl" and a.players), None)
+        echl = next((a for a in self.affiliates if a.league == "echl" and a.players), None)
+        sections = []
+        if ahl:
+            stats = self.get(f"/club-stats/{self.team}/now")
+            nhl_gp = {norm(full_name(p)): p.get("gamesPlayed") or 0
+                      for p in dicts(stats.get("skaters")) + dicts(stats.get("goalies"))}
+            roster = self.get(f"/roster/{self.team}/current")
+            on_nhl = {norm(full_name(p)) for g in ("forwards", "defensemen", "goalies") for p in dicts(roster.get(g))}
+            rows = []
+            for key, p in ahl.players.items():
+                if nhl_gp.get(key, 0) > 0:
+                    rows.append({"name": p["name"], "pos": p["pos"], "upper_gp": nhl_gp[key], "lower_gp": p["gp"],
+                                 "up": key in on_nhl})
+            if rows:
+                sections.append({"title": f"{self.team} and {ahl.team.get('code')}", "upper": self.team,
+                                 "lower": ahl.team.get("code"), "rows": sorted(rows, key=lambda r: (not r["up"], -r["upper_gp"]))})
+        if ahl and echl:
+            rows = []
+            for key, p in echl.players.items():
+                if ahl.players.get(key, {}).get("gp", 0) > 0:
+                    up = key in ahl.roster if ahl.roster else key not in echl.roster
+                    rows.append({"name": p["name"], "pos": p["pos"], "upper_gp": ahl.players[key]["gp"],
+                                 "lower_gp": p["gp"], "up": up})
+            if rows:
+                sections.append({"title": f"{ahl.team.get('code')} and {echl.team.get('code')}", "upper": ahl.team.get("code"),
+                                 "lower": echl.team.get("code"), "rows": sorted(rows, key=lambda r: (not r["up"], -r["upper_gp"]))})
+        self.data["callups"] = sections
+
     # ---- offseason ----
     def offseason(self, schedule, season):
         now = datetime.now(timezone.utc)
@@ -451,6 +536,10 @@ class Extras:
             threading.Thread(target=self.safely, args=("prospects", self.prospects), daemon=True).start()
         if self.due("history", 60):
             self.data["on_this_day"] = self.history.today()
+        if season and self.due("team-stats", 60):
+            self.safely("special teams", self.team_stats, season)
+        if self.due("callups", 60):
+            self.safely("call-ups", self.callups)
         if self.due("offseason", 60):
             self.safely("offseason", self.offseason, schedule, season)
         return self.data
