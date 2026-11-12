@@ -188,7 +188,7 @@ def slim_game(g):
         "lastPeriodType": (g.get("gameOutcome") or {}).get("lastPeriodType"),
         "series": slim_status(g.get("seriesStatus")),
         "tv": [{"network": b.get("network"), "market": b.get("market"), "country": b.get("countryCode")}
-               for b in (g.get("tvBroadcasts") or [])],
+               for b in dicts(g.get("tvBroadcasts"))],
     }
 
 
@@ -268,16 +268,16 @@ def team_form(schedule, n=10):
 
 def scoring_goals(landing):
     out = []
-    for per in (landing.get("summary") or {}).get("scoring") or []:
+    for per in dicts((landing.get("summary") or {}).get("scoring")):
         label = period_label(per.get("periodDescriptor"))
         num = (per.get("periodDescriptor") or {}).get("number") or 0
-        for gl in per.get("goals") or []:
+        for gl in dicts(per.get("goals")):
             out.append({
                 "period": label, "num": num, "time": gl.get("timeInPeriod"),
                 "team": text(gl.get("teamAbbrev")),
                 "scorer": last_name(gl), "full": full_name(gl), "total": gl.get("goalsToDate"),
                 "headshot": gl.get("headshot"),
-                "assists": [{"name": last_name(a), "num": a.get("assistsToDate")} for a in gl.get("assists") or []],
+                "assists": [{"name": last_name(a), "num": a.get("assistsToDate")} for a in dicts(gl.get("assists"))],
                 "strength": (gl.get("strength") or "").lower(),
                 "en": (gl.get("goalModifier") or "") == "empty-net",
                 "away": gl.get("awayScore"), "home": gl.get("homeScore"),
@@ -319,9 +319,9 @@ def active_penalties(landing, game, goals):
 
     # Group penalties by team, player and the time they were called.
     groups = {}
-    for per in (landing.get("summary") or {}).get("penalties") or []:
+    for per in dicts((landing.get("summary") or {}).get("penalties")):
         num = (per.get("periodDescriptor") or {}).get("number") or 0
-        for p in per.get("penalties") or []:
+        for p in dicts(per.get("penalties")):
             kind = (p.get("type") or "").upper()
             if kind not in ("MIN", "MAJ", "BEN"):
                 continue
@@ -369,7 +369,7 @@ def active_penalties(landing, game, goals):
 def slim_shootout(landing):
     """Shootout attempts in order: who shot, for which team, and whether it went in."""
     out = []
-    for i, a in enumerate((landing.get("summary") or {}).get("shootout") or []):
+    for i, a in enumerate(dicts((landing.get("summary") or {}).get("shootout"))):
         result = str(a.get("result") or "").lower()
         out.append({"seq": a.get("sequence") or i + 1, "team": text(a.get("teamAbbrev")),
                     "name": text(a.get("lastName")) or text(a.get("name")), "full": full_name(a),
@@ -400,34 +400,59 @@ def slim_lineups(box):
     return out or None
 
 
+def dicts(x):
+    """Only the dict entries of a list. The NHL feed sometimes changes shapes, and one
+    unexpected value shouldn't take the whole board down."""
+    return [i for i in x if isinstance(i, dict)] if isinstance(x, list) else []
+
+
+def section(label, fn, default):
+    try:
+        return fn()
+    except Exception as e:
+        log.warning("%s unavailable: %s", label, e)
+        return default
+
+
 def build_details(landing, rr, game):
+    landing = landing if isinstance(landing, dict) else {}
+    rr = rr if isinstance(rr, dict) else {}
+    summary = landing.get("summary") if isinstance(landing.get("summary"), dict) else {}
+
     def rows(items):
         return [{"label": period_label(x.get("periodDescriptor")), "away": x.get("away"), "home": x.get("home")}
-                for x in items or []]
-    ls = rr.get("linescore") or {}
-    stats = {s.get("category"): (s.get("awayValue"), s.get("homeValue")) for s in rr.get("teamGameStats") or []}
-    order = [("sog", "Shots"), ("powerPlay", "Power play"), ("faceoffWinningPctg", "Faceoffs"),
-             ("hits", "Hits"), ("blockedShots", "Blocked shots"), ("pim", "Penalty minutes")]
-    goals = scoring_goals(landing)
-    stars = []
-    for s in (landing.get("summary") or {}).get("threeStars") or []:
-        line = []
-        if s.get("goals") is not None or s.get("assists") is not None:
-            line = [f"{s.get('goals', 0)}G {s.get('assists', 0)}A"]
-        if s.get("savePctg") is not None:
-            line = [f"{s['savePctg']:.3f} SV%".lstrip("0")]
-        stars.append({"star": s.get("star"), "name": text(s.get("name")) or full_name(s),
-                      "team": text(s.get("teamAbbrev")), "headshot": s.get("headshot"),
-                      "pos": s.get("position"), "line": " ".join(line)})
+                for x in dicts(items)]
+
+    def stars():
+        out = []
+        for st in dicts(summary.get("threeStars")):
+            line = []
+            if st.get("goals") is not None or st.get("assists") is not None:
+                line = [f"{st.get('goals', 0)}G {st.get('assists', 0)}A"]
+            if isinstance(st.get("savePctg"), (int, float)):
+                line = [f"{st['savePctg']:.3f} SV%".lstrip("0")]
+            out.append({"star": st.get("star"), "name": text(st.get("name")) or full_name(st),
+                        "team": text(st.get("teamAbbrev")), "headshot": st.get("headshot"),
+                        "pos": st.get("position"), "line": " ".join(line)})
+        return sorted(out, key=lambda x: x["star"] or 9)
+
+    def stats():
+        found = {x.get("category"): (x.get("awayValue"), x.get("homeValue")) for x in dicts(rr.get("teamGameStats"))}
+        order = [("sog", "Shots"), ("powerPlay", "Power play"), ("faceoffWinningPctg", "Faceoffs"),
+                 ("hits", "Hits"), ("blockedShots", "Blocked shots"), ("pim", "Penalty minutes")]
+        return [{"key": k, "label": lbl, "away": found[k][0], "home": found[k][1]} for k, lbl in order if k in found]
+
+    ls = rr.get("linescore") if isinstance(rr.get("linescore"), dict) else {}
+    goals = section("scoring", lambda: scoring_goals(landing), [])
     return {
-        "periods": rows(ls.get("byPeriod")),
-        "totals": ls.get("totals"),
-        "shots": rows(rr.get("shotsByPeriod")),
-        "stats": [{"key": k, "label": lbl, "away": stats[k][0], "home": stats[k][1]} for k, lbl in order if k in stats],
+        "periods": section("line score", lambda: rows(ls.get("byPeriod")), []),
+        "totals": ls.get("totals") if isinstance(ls.get("totals"), dict) else None,
+        "shots": section("shots by period", lambda: rows(rr.get("shotsByPeriod")), []),
+        "stats": section("team stats", stats, []),
         "goals": goals,
-        "stars": sorted(stars, key=lambda s: s["star"] or 9),
-        "penalties": active_penalties(landing, game, goals),
-        "shootout": slim_shootout(landing),
+        "stars": section("three stars", stars, []),
+        "penalties": section("penalties", lambda: active_penalties(landing, game, goals), []),
+        "shootout": section("shootout", lambda: slim_shootout(landing), []),
     }, goals
 
 
@@ -855,7 +880,7 @@ class Poller:
                 mode = self.tick()
                 delay = 10 if mode in ("live", "pregame") else (20 if getattr(self, "affiliate_live", False) else 60)
             except Exception as e:   # keep the wall display alive no matter what
-                log.warning("update failed: %s", e)
+                log.exception("update failed: %s", e)
                 with lock:
                     state["error"] = "Can't reach the NHL feed. Retrying."
                 delay = 30
