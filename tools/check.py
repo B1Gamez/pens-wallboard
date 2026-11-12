@@ -21,13 +21,25 @@ for f in ("app.py", "affiliates.py", "extras.py", "demo.py"):
 if failed:
     sys.exit(1)
 
+import tempfile  # noqa: E402
+
 import app  # noqa: E402
+
+app.SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "pens-wallboard-check.json")   # don't touch your real setting
 
 client = app.app.test_client()
 checks = [
     ("API responds", lambda: client.get("/api/state").status_code == 200),
     ("API has the expected fields", lambda: {"mode", "scores", "standings", "config"} <= set(client.get("/api/state").get_json())),
     ("Page loads", lambda: client.get("/").status_code == 200 and b"</html>" in client.get("/").data),
+    ("Test goals blocked from the internet",
+     lambda: client.post("/api/test-goal", headers={"Cf-Connecting-Ip": "203.0.113.5"}).status_code == 403),
+    ("Delay can be changed at home",
+     lambda: client.post("/api/delay?seconds=0", environ_base={"REMOTE_ADDR": "192.168.1.20"}).get_json()["delay"] == 0),
+    ("Delay can't be changed from the internet",
+     lambda: client.post("/api/delay?seconds=30", headers={"Cf-Connecting-Ip": "203.0.113.5"}).status_code == 403),
+    ("Test goals allowed at home",
+     lambda: client.post("/api/test-goal", environ_base={"REMOTE_ADDR": "192.168.1.20"}).status_code == 200),
 ]
 for name, test in checks:
     try:

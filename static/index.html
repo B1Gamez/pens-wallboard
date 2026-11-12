@@ -30,6 +30,7 @@
 
   .rink { position: absolute; inset: 0; pointer-events: none; opacity: .09; }
   .rink svg { width: 100%; height: 100%; }
+  .delaytag { position: absolute; top: 7.4vh; right: 3vw; font-size: 1.7vh; color: var(--steel); }
   .corner-clock { position: absolute; top: 3vh; right: 3vw; font-family: var(--display); font-size: 3.6vh; font-weight: 600; color: var(--steel); font-variant-numeric: tabular-nums; }
   .live-dot { width: 2.2vh; height: 2.2vh; border-radius: 50%; background: var(--lamp); align-self: center; animation: pulse 2s ease-in-out infinite; flex: none; }
   @keyframes pulse { 50% { opacity: .35; } }
@@ -376,6 +377,7 @@
 
 <section id="board" class="view">
   <div class="corner-clock" data-clock></div>
+  <div class="delaytag" id="delayTag"></div>
   <div class="boardtag" id="boardTag"></div>
   <div class="matchup">
     <div class="side" id="awaySide"><img alt=""><div class="tname"></div><div class="sog"></div><div class="goalie"></div></div>
@@ -445,6 +447,8 @@ const DIV_SHORT = {Metropolitan: "Metro", Atlantic: "Atlantic", Central: "Centra
 const $ = id => document.getElementById(id);
 let hornAudio = null;
 let lastAffGoal = null;
+// ?delay=N in the page address overrides the server's stream delay for this screen
+const DELAY_PARAM = (() => { const d = new URLSearchParams(location.search).get("delay"); return d != null ? `?delay=${encodeURIComponent(d)}` : ""; })();
 let S = null, build = null, lastGoal = null, rotIdx = 0, rotTimer = null, goalUntil = 0, newsKey = "";
 
 document.querySelectorAll("#board, #summary, #league").forEach(v => v.prepend($("rinkTpl").content.cloneNode(true)));
@@ -1273,6 +1277,7 @@ function render() {
   if (gameView || takeover) renderAffBadge(takeover && takeover.code);
   else $("affBadge").classList.remove("on");
   $("affBadge").classList.toggle("alt", !!summary || affSummary);
+  $("delayTag").textContent = S.delay ? `${S.delay}s delay` : "";
 
   // Warn if the data has stopped updating.
   const age = S.updated ? (Date.now() - new Date(S.updated)) / 60000 : 0;
@@ -1288,7 +1293,7 @@ function render() {
 
 async function poll() {
   try {
-    const r = await fetch("/api/state", {cache: "no-store"});
+    const r = await fetch("/api/state" + DELAY_PARAM, {cache: "no-store"});
     S = await r.json();
     // Reload when the server restarts or the page file is updated.
     if (S.build && build && S.build !== build) { location.reload(); return; }
