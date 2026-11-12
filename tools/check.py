@@ -38,6 +38,8 @@ checks = [
      lambda: client.post("/api/delay?seconds=0", environ_base={"REMOTE_ADDR": "192.168.1.20"}).get_json()["delay"] == 0),
     ("Delay can't be changed from the internet",
      lambda: client.post("/api/delay?seconds=30", headers={"Cf-Connecting-Ip": "203.0.113.5"}).status_code == 403),
+    ("Updates can't be triggered from the internet",
+     lambda: client.post("/api/update", headers={"Cf-Connecting-Ip": "203.0.113.5"}).status_code == 403),
     ("Test goals allowed at home",
      lambda: client.post("/api/test-goal", environ_base={"REMOTE_ADDR": "192.168.1.20"}).status_code == 200),
 ]

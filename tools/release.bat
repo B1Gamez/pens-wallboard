@@ -26,4 +26,11 @@ git merge --ff-only dev || (
 git push origin main
 git checkout dev
 echo.
-echo Released. The wall display will update within 5 minutes.
+if defined WALLBOARD_HOST (
+    echo Released. Telling the wall display to update now...
+    curl -s -X POST http://%WALLBOARD_HOST%/api/update
+    echo.
+) else (
+    echo Released. The wall display will update within 5 minutes.
+    echo Tip: run "setx WALLBOARD_HOST 192.168.x.x:8080" once to make it update right away.
+)

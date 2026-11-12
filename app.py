@@ -884,6 +884,23 @@ def api_state():
     return jsonify({**snap, "build": build_id(), "config": config(), "delay": delay})
 
 
+@app.route("/api/update", methods=["POST"])
+def api_update():
+    """Check GitHub for a new release right now instead of waiting for the 5-minute timer.
+    Home network only. Runs the same updater as the timer, in its own service, so the
+    update can safely restart this server."""
+    if not allowed_to_control():
+        return jsonify({"ok": False, "error": "Not allowed from outside the home network"}), 403
+    try:
+        r = subprocess.run(["sudo", "-n", "/usr/bin/systemctl", "start", "--no-block", "pens-wallboard-update"],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        return jsonify({"ok": False, "error": f"Couldn't start the updater: {e}"}), 500
+    if r.returncode != 0:
+        return jsonify({"ok": False, "error": (r.stderr or r.stdout).strip() or "updater failed to start"}), 500
+    return jsonify({"ok": True, "message": "Update started. The board will restart if there's anything new."})
+
+
 @app.route("/api/delay", methods=["GET", "POST"])
 def api_delay():
     """GET shows the current delay; POST ?seconds=45 changes it (home network only). It's saved."""

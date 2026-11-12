@@ -176,7 +176,9 @@ updates itself from `main`.
 - `tools\save.bat "message"` commits and pushes to the `dev` branch. The wall ignores `dev`.
 - `tools\release.bat "message"` runs `tools/check.py` and, if it passes, merges `dev` into `main`.
 
-On the server, `deploy/update.sh` runs every 5 minutes from a systemd timer. If `main` has new
+On the server, `deploy/update.sh` runs every 5 minutes from a systemd timer. If you set
+`WALLBOARD_HOST` on your PC (`setx WALLBOARD_HOST 192.168.x.x:8080`), `release.bat` also tells the
+server to update right away through `/api/update`, which only works from your home network. If `main` has new
 commits it pulls them and restarts the service, and if the new version doesn't start it rolls back.
 
 ## Disclaimer
