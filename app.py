@@ -12,6 +12,8 @@ Run:   python app.py                       (real data)
        DEMO=echl         python app.py     (fake Everblades game live on its own)
        DEMO=playoffs     python app.py     (fake playoff game and bracket)
        DEMO=offseason    python app.py     (fake summer: countdowns, prospects, history)
+       DEMO=shootout     python app.py     (fake shootout, a new attempt every 10 seconds)
+       DEMO=midseason    python app.py     (fake second half of the season, with the projected bracket)
 Then open http://localhost:8080
 (On Windows Command Prompt: `set DEMO=live` then `python app.py`; `set DEMO=` to go back to real data.)
 """
@@ -364,6 +366,19 @@ def active_penalties(landing, game, goals):
     return out
 
 
+def slim_shootout(landing):
+    """Shootout attempts in order: who shot, for which team, and whether it went in."""
+    out = []
+    for i, a in enumerate((landing.get("summary") or {}).get("shootout") or []):
+        result = str(a.get("result") or "").lower()
+        out.append({"seq": a.get("sequence") or i + 1, "team": text(a.get("teamAbbrev")),
+                    "name": text(a.get("lastName")) or text(a.get("name")), "full": full_name(a),
+                    "headshot": a.get("headshot"), "shot": (a.get("shotType") or "").replace("-", " "),
+                    "goal": result == "goal", "result": result or "no goal",
+                    "winner": bool(a.get("gameWinner"))})
+    return out
+
+
 def slim_lineups(box):
     """Everyone who dressed, with their numbers for this game (NHL boxscore)."""
     pbs = box.get("playerByGameStats") or {}
@@ -412,6 +427,7 @@ def build_details(landing, rr, game):
         "goals": goals,
         "stars": sorted(stars, key=lambda s: s["star"] or 9),
         "penalties": active_penalties(landing, game, goals),
+        "shootout": slim_shootout(landing),
     }, goals
 
 

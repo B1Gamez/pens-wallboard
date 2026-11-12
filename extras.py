@@ -71,6 +71,18 @@ def slim_series(s):
     }
 
 
+def slim_bracket_series(s):
+    def side(t, wins, seed):
+        t = t or {}
+        return {"abbrev": t.get("abbrev"), "logo": t.get("darkLogo") or t.get("logo"), "wins": wins, "seed": seed}
+    top = side(s.get("topSeedTeam"), s.get("topSeedWins"), s.get("topSeedRankAbbrev"))
+    bot = side(s.get("bottomSeedTeam"), s.get("bottomSeedWins"), s.get("bottomSeedRankAbbrev"))
+    need = s.get("neededToWin") or 4
+    return {"letter": s.get("seriesLetter"), "round": s.get("playoffRound"), "top": top, "bottom": bot, "need": need,
+            "text": series_text(None, top["abbrev"], top["wins"], bot["abbrev"], bot["wins"], need)
+            if top["abbrev"] and bot["abbrev"] else ""}
+
+
 # ---------------------------------------------------------------- history
 # Hand-picked moments (month-day: list of "year: text"). Add your own in data/history_events.json
 # using the same shape, e.g. {"03-15": ["1995: Something happened"]}.
@@ -210,8 +222,23 @@ class Extras:
                 ss = slim_series(s)
                 if self.team in (ss["top"]["abbrev"], ss["bottom"]["abbrev"]):
                     ours = ss
+        # The whole bracket, by series letter (A-H first round, I-L second, M-N conference finals, O final)
+        bracket = {}
+        try:
+            year = int(str(season)[4:8])
+            for b in self.get(f"/playoff-bracket/{year}").get("series") or []:
+                sb = slim_bracket_series(b)
+                if sb["letter"]:
+                    bracket[sb["letter"]] = sb
+        except Exception as e:
+            log.info("playoff bracket unavailable, using the series list: %s", e)
+        for r in rounds:                      # fill gaps from the series list
+            for x in r.get("series") or []:
+                sx = slim_series(x)
+                if sx["letter"] and sx["letter"] not in bracket:
+                    bracket[sx["letter"]] = sx
         self.data["playoffs"] = {"round": current.get("roundNumber"), "label": current.get("roundLabel") or "",
-                                 "series": series, "ours": ours}
+                                 "series": series, "ours": ours, "bracket": bracket}
 
     # ---- injuries (ESPN) ----
     def injuries(self, opponent):

@@ -190,7 +190,18 @@ def extras(kind, now):
                   ser("WSH", 4, "MTL", 1, "WSH wins 4-1"), ser("TOR", 3, "OTT", 1, "TOR leads 3-1"),
                   ser("WPG", 2, "STL", 3, "STL leads 3-2"), ser("DAL", 3, "COL", 3, "Series tied 3-3"),
                   ser("VGK", 4, "MIN", 0, "VGK wins 4-0"), ser("EDM", 2, "LAK", 1, "EDM leads 2-1")]
-        out["playoffs"] = {"round": 1, "label": "1st-round", "series": series, "ours": series[0]}
+        br = lambda l, t, tw, b, bw: {"letter": l, "need": 4, "top": {"abbrev": t, "wins": tw, "logo": logo(t)},
+                                      "bottom": {"abbrev": b, "wins": bw, "logo": logo(b)}, "text": ""}
+        bracket = {
+            "A": br("A", "FLA", 4, "TBL", 2), "B": br("B", "TOR", 4, "OTT", 3), "C": br("C", "WSH", 4, "MTL", 1),
+            "D": br("D", "CAR", 4, "PIT", 3), "E": br("E", "WPG", 4, "STL", 3), "F": br("F", "DAL", 4, "COL", 2),
+            "G": br("G", "VGK", 4, "MIN", 0), "H": br("H", "EDM", 4, "LAK", 2),
+            "I": br("I", "FLA", 2, "TOR", 1), "J": br("J", "WSH", 1, "CAR", 2),
+            "K": br("K", "WPG", 0, "DAL", 1), "L": br("L", "VGK", 1, "EDM", 1)}
+        from extras import series_text
+        for s in bracket.values():
+            s["text"] = series_text(None, s["top"]["abbrev"], s["top"]["wins"], s["bottom"]["abbrev"], s["bottom"]["wins"])
+        out["playoffs"] = {"round": 2, "label": "2nd-round", "series": series, "ours": series[0], "bracket": bracket}
     if kind == "offseason":
         y = now.year
         out["offseason"] = {"events": [
@@ -246,7 +257,11 @@ def run(kind, state, lock):
     with lock:
         state.update(extras(kind, now))
         state["affiliates"] = affiliates(kind, now) if kind != "offseason" else []
-        state.update(standings=standings(), upcoming=upcoming, form=form, leaders=leaders,
+        table = standings()
+        if kind == "midseason":            # past the halfway mark, so the projected bracket shows
+            for t in table:
+                t["gp"] *= 3; t["w"] *= 3; t["l"] *= 3; t["otl"] *= 3; t["pts"] *= 3
+        state.update(standings=table, upcoming=upcoming, form=form, leaders=leaders,
                      league_leaders=league, news=news, milestones=milestones,
                      opponent=opponent if kind == "gameday" else None, updated=now.isoformat())
     while True:
@@ -269,6 +284,22 @@ def run(kind, state, lock):
                     g["away"] = dict(g["away"], score=3); g.update(state="FINAL", situation=None)
                 state.update(mode="live" if kind == "intermission" else "final", game=g,
                              details=details(final=kind == "final"), scores=others + [g])
+            elif kind == "shootout":
+                so = state.get("_so", [])
+                order = [("PIT", "Crosby"), ("PHI", "Konecny"), ("PIT", "Malkin"), ("PHI", "Michkov"),
+                         ("PIT", "Rakell"), ("PHI", "Couturier")]
+                if len(so) < len(order):
+                    team, name = order[len(so)]
+                    goal = random.random() < 0.4
+                    so = so + [{"seq": len(so) + 1, "team": team, "name": name, "full": name, "headshot": "",
+                                "shot": random.choice(["wrist", "snap", "backhand"]), "goal": goal,
+                                "result": "goal" if goal else random.choice(["save", "miss"]), "winner": False}]
+                state["_so"] = so
+                g = dict(pens)
+                g.update(period=5, periodType="SO", clock="00:00", situation=None)
+                g["away"] = dict(g["away"], score=2); g["home"] = dict(g["home"], score=2)
+                det = details(); det["shootout"] = so; det["penalties"] = []
+                state.update(mode="live", game=g, details=det, scores=others + [g])
             elif kind == "playoffs":
                 pg = dict(pens)
                 pg["series"] = {"text": "CAR leads 3-2", "game": 6, "round": 1, "title": "1st Round"}
@@ -296,6 +327,6 @@ def run(kind, state, lock):
                 today = game("PIT", "SJS", None, None, "FUT", start=tonight)
                 today["away"]["name"], today["home"]["name"] = "Penguins", "Sharks"
                 state.update(mode="off", game=today, scores=others + [today])
-            else:
+            else:                          # off, midseason
                 state.update(mode="off", game=None, scores=others)
         time.sleep(10)
