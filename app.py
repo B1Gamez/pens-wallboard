@@ -15,7 +15,11 @@ Run:   python app.py                       (real data)
 Then open http://localhost:8080
 (On Windows Command Prompt: `set DEMO=live` then `python app.py`; `set DEMO=` to go back to real data.)
 """
+import copy
+import ipaddress
+import json
 import os
+from collections import deque
 import random
 import subprocess
 import threading
@@ -57,6 +61,9 @@ AFFILIATE_HORN = os.environ.get("AFFILIATE_HORN", "on").lower() != "off"
 AFFILIATE_HORN_VOLUME = float(os.environ.get("AFFILIATE_HORN_VOLUME", str(HORN_VOLUME)))
 AFFILIATE_HOOKS = os.environ.get("AFFILIATE_HOOKS", "off").lower() != "off"     # also fire goal hooks for affiliate goals
 AFFILIATE_NEWS = os.environ.get("AFFILIATE_NEWS", "on").lower() != "off"
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+STREAM_DELAY = int(os.environ.get("STREAM_DELAY", "0"))   # seconds to hold everything back, to match your TV/stream
+MAX_DELAY = 300   # lets you trigger test goals from outside your home network
 DEMO = os.environ.get("DEMO", "").lower()
 
 API = "https://api-web.nhle.com/v1"
@@ -462,6 +469,53 @@ def has_team(g):
     return TEAM in (g["away"]["abbrev"], g["home"]["abbrev"])
 
 
+# ---------- stream delay ----------
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "settings.json")
+history = deque(maxlen=MAX_DELAY // 2 + 10)      # (time, snapshot of state) every 2 seconds
+
+
+def load_delay():
+    try:
+        with open(SETTINGS_FILE) as f:
+            return max(0, min(MAX_DELAY, int(json.load(f).get("delay", STREAM_DELAY))))
+    except (OSError, ValueError, TypeError):
+        return STREAM_DELAY
+
+
+current_delay = load_delay()
+
+
+def save_delay(seconds):
+    global current_delay
+    current_delay = max(0, min(MAX_DELAY, int(seconds)))
+    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump({"delay": current_delay}, f)
+
+
+def record_history():
+    """Keep the last few minutes of state so the page can be shown on a delay."""
+    while True:
+        with lock:
+            snap = copy.deepcopy(state)
+        history.append((time.time(), snap))
+        time.sleep(2)
+
+
+def snapshot(delay):
+    if delay <= 0 or not history:
+        return None
+    cutoff = time.time() - delay
+    older = [s for t, s in history if t <= cutoff]
+    return older[-1] if older else history[0][1]
+
+
+def fire_goal_hooks_later(team=None):
+    """Goal lights etc. wait out the stream delay too, so they go off when you see the goal."""
+    args = (team,) if team else ()
+    threading.Timer(current_delay, fire_goal_hooks, args=args).start()
+
+
 # ---------- goal hook ----------
 def fire_goal_hooks(team=TEAM):
     if GOAL_HOOK_CMD:
@@ -501,7 +555,7 @@ class Poller:
                         state["aff_goal_seq"] += 1
                         state["aff_goal"] = ev
                     if AFFILIATE_HOOKS:
-                        threading.Thread(target=fire_goal_hooks, args=(ev["team"],), daemon=True).start()
+                        fire_goal_hooks_later(ev["team"])
                 s = a.summary()
                 if s:
                     summaries.append(s)
@@ -540,7 +594,7 @@ class Poller:
             log.info("GOAL %s! %s -> %s", TEAM, prev, score)
             with lock:
                 state["goal_seq"] += 1
-            threading.Thread(target=fire_goal_hooks, daemon=True).start()
+            fire_goal_hooks_later()
 
     def pick_mode(self, g):
         if not g:
@@ -790,26 +844,66 @@ def config():
 
 @app.route("/api/state")
 def api_state():
-    with lock:
-        return jsonify({**state, "build": build_id(), "config": config()})
+    # ?delay=N lets one screen use its own delay (e.g. ?delay=0 for friends watching live)
+    try:
+        delay = max(0, min(MAX_DELAY, int(request.args.get("delay", current_delay))))
+    except ValueError:
+        delay = current_delay
+    snap = snapshot(delay)
+    if snap is None:
+        with lock:
+            snap = copy.deepcopy(state)
+    return jsonify({**snap, "build": build_id(), "config": config(), "delay": delay})
+
+
+@app.route("/api/delay", methods=["GET", "POST"])
+def api_delay():
+    """GET shows the current delay; POST ?seconds=45 changes it (home network only). It's saved."""
+    if request.method == "POST":
+        if not allowed_to_control():
+            return jsonify({"ok": False, "error": "Not allowed from outside the home network"}), 403
+        try:
+            save_delay(request.args.get("seconds", "0"))
+        except ValueError:
+            return jsonify({"ok": False, "error": "seconds must be a number"}), 400
+    return jsonify({"ok": True, "delay": current_delay})
+
+
+def from_home_network():
+    """True for requests from this machine or your LAN. Anything that came through a
+    Cloudflare Tunnel carries a Cf-Connecting-Ip header and counts as outside."""
+    if request.headers.get("Cf-Connecting-Ip") or request.headers.get("X-Forwarded-For"):
+        return False
+    try:
+        return ipaddress.ip_address(request.remote_addr or "").is_private
+    except ValueError:
+        return False
+
+
+def allowed_to_control():
+    token = request.headers.get("X-Admin-Token") or request.args.get("token") or ""
+    return from_home_network() or (ADMIN_TOKEN and token == ADMIN_TOKEN)
 
 
 @app.route("/api/test-goal", methods=["POST"])
 def test_goal():
     """Trigger the goal screen, horn and goal hooks without waiting for a real goal.
-    Add ?team=WBS (or any affiliate code) to test an affiliate goal instead."""
+    Add ?team=WBS (or any affiliate code) to test an affiliate goal instead.
+    Only works from your home network, or with ADMIN_TOKEN from anywhere else."""
+    if not allowed_to_control():
+        return jsonify({"ok": False, "error": "Not allowed from outside the home network"}), 403
     team = (request.args.get("team") or TEAM).upper()
     if team == TEAM:
         with lock:
             state["goal_seq"] += 1
-        threading.Thread(target=fire_goal_hooks, daemon=True).start()
+        fire_goal_hooks_later()
     else:
         with lock:
             aff = next((a for a in state["affiliates"] if (a.get("code") or "").upper() == team), None)
             state["aff_goal_seq"] += 1
             state["aff_goal"] = {"team": team, "league": aff["league"] if aff else "", "us": 1, "them": 0, "opp": "TST"}
         if AFFILIATE_HOOKS:
-            threading.Thread(target=fire_goal_hooks, args=(team,), daemon=True).start()
+            fire_goal_hooks_later(team)
     return jsonify({"ok": True, "team": team})
 
 
@@ -819,6 +913,7 @@ def index():
 
 
 if __name__ == "__main__":
+    threading.Thread(target=record_history, daemon=True).start()
     if DEMO:
         import demo
         threading.Thread(target=demo.run, args=(DEMO, state, lock), daemon=True).start()

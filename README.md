@@ -102,8 +102,20 @@ game. To test without waiting for a goal:
     curl -X POST http://<server-ip>:8080/api/test-goal
     curl -X POST "http://<server-ip>:8080/api/test-goal?team=WBS"
 
-If you have goal lights or anything else you want to trigger, set `GOAL_HOOK_URL` (gets a POST with
+Test goals only work from your home network, so nobody can set off your horn through a public link
+(set `ADMIN_TOKEN` if you want to do it from elsewhere). If you have goal lights or anything else you want to trigger, set `GOAL_HOOK_URL` (gets a POST with
 the team) or `GOAL_HOOK_CMD` (runs a command).
+
+## Matching your stream delay
+
+If your stream runs behind the live feed, the board can wait a set number of seconds before showing
+anything, including goals, the horn and goal lights. Change it on the fly from any computer at home:
+
+    curl -X POST "http://<server-ip>:8080/api/delay?seconds=45"
+
+It's saved, so it sticks after a restart. `curl http://<server-ip>:8080/api/delay` shows the current
+value. A screen can use its own delay with `?delay=0` in its address (handy for friends watching
+through a public link).
 
 ## Settings
 
@@ -132,6 +144,8 @@ These go in the service file as `Environment=` lines (`sudo systemctl edit pens-
 | `AFFILIATE_NEWS` | `on` | Mix farm team headlines into the ticker |
 | `DRAFT_DATE` | last Friday of June | For the offseason countdown, e.g. `2027-06-25` |
 | `FREE_AGENCY_DATE` | July 1 | For the offseason countdown |
+| `STREAM_DELAY` | `0` | Seconds to hold the board (and goal hooks) back to match your stream. Can also be changed live, see below |
+| `ADMIN_TOKEN` | none | Lets you trigger test goals from outside your home network (`?token=...`) |
 | `PORT` | `8080` | Web port |
 
 ## Where the data comes from
