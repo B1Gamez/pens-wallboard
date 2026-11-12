@@ -301,15 +301,22 @@ def game_seconds(num, kind, game_type, remaining_in_period):
 
 
 def active_penalties(landing, game, goals):
-    """Penalties still being served, with time left, from the scoring/penalty summary."""
+    """Penalties still being served, with time left, from the scoring/penalty summary.
+
+    Penalties to the same player at the same moment are served back to back, so a
+    double minor (listed either as one 4-minute penalty or as two 2-minute ones)
+    shows once with its full time. A power-play goal against ends only the minor
+    being served at that moment."""
     if not game.get("clock") or game.get("intermission") or game["state"] not in LIVE_STATES:
         return []
     gt = game.get("gameType") or 2
     now = game_seconds(game.get("period") or 1, game.get("periodType"), gt, mmss(game["clock"]))
     plen = lambda n: 300 if (n > 3 and gt != 3) else 1200
-    goal_times = [(game_seconds(g["num"], None, gt, plen(g["num"]) - mmss(g["time"])), g)
-                  for g in goals if g["num"]]
-    out = []
+    goal_times = sorted((game_seconds(g["num"], None, gt, plen(g["num"]) - mmss(g["time"])), g)
+                        for g in goals if g["num"])
+
+    # Group penalties by team, player and the time they were called.
+    groups = {}
     for per in (landing.get("summary") or {}).get("penalties") or []:
         num = (per.get("periodDescriptor") or {}).get("number") or 0
         for p in per.get("penalties") or []:
@@ -317,22 +324,43 @@ def active_penalties(landing, game, goals):
             if kind not in ("MIN", "MAJ", "BEN"):
                 continue
             start = game_seconds(num, None, gt, plen(num) - mmss(p.get("timeInPeriod")))
-            end = start + (p.get("duration") or 2) * 60
             team = text(p.get("teamAbbrev"))
-            if kind in ("MIN", "BEN") and (p.get("duration") or 2) == 2:
-                # A power-play goal against ends a minor early.
-                for t, g in goal_times:
-                    if start < t <= end and g["team"] != team and g["strength"] == "pp":
-                        end = t
+            who = p.get("committedByPlayer") or p.get("servedBy") or ""
+            if isinstance(who, dict):
+                who = text(who.get("lastName")) or text(who)
+            who = who or "Bench"
+            minutes = p.get("duration") or 2
+            # A 4-minute minor is two 2-minute minors served back to back.
+            pieces = [2, 2] if kind in ("MIN", "BEN") and minutes == 4 else [minutes]
+            groups.setdefault((team, who, start), []).extend(
+                {"kind": kind, "minutes": m, "desc": (p.get("descKey") or "").replace("-", " ").capitalize()}
+                for m in pieces)
+
+    out = []
+    for (team, who, start), parts in groups.items():
+        # Minors first, then majors, served one after another.
+        parts.sort(key=lambda x: (x["kind"] == "MAJ", x["minutes"]))
+        t = start
+        for part in parts:
+            seg_end = t + part["minutes"] * 60
+            if part["kind"] in ("MIN", "BEN") and part["minutes"] == 2:
+                for gt_, g in goal_times:
+                    if t < gt_ <= seg_end and g["team"] != team and g["strength"] == "pp":
+                        seg_end = gt_
                         break
-            if start <= now < end:
-                who = p.get("committedByPlayer") or p.get("servedBy") or ""
-                if isinstance(who, dict):
-                    who = text(who.get("lastName")) or text(who)
-                left = end - now
-                out.append({"team": team, "player": who or "Bench",
-                            "infraction": (p.get("descKey") or "").replace("-", " ").capitalize(),
-                            "left": f"{left // 60}:{left % 60:02d}"})
+            t = seg_end
+        end = t
+        if not (start <= now < end):
+            continue
+        descs = [x["desc"] for x in parts]
+        minors = sum(1 for x in parts if x["kind"] in ("MIN", "BEN"))
+        if len(parts) == 2 and minors == 2 and descs[0] == descs[1]:
+            label = f"{descs[0]} (double minor)"
+        else:
+            label = ", ".join(dict.fromkeys(d for d in descs if d)) or "Penalty"
+        left = end - now
+        out.append({"team": team, "player": who, "infraction": label,
+                    "left": f"{left // 60}:{left % 60:02d}"})
     return out
 
 
